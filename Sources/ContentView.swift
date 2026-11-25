@@ -3,6 +3,8 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var m = MetronomeEngine()
     @State private var taps: [Date] = []
+    @State private var editingBPM = false
+    @State private var bpmText = ""
 
     var body: some View {
         NavigationStack {
@@ -53,10 +55,26 @@ struct ContentView: View {
     private var tempoSection: some View {
         VStack(spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("\(Int(m.bpm))").font(.system(size: 64, weight: .bold, design: .rounded)).monospacedDigit()
+                Button {
+                    bpmText = "\(Int(m.bpm))"
+                    editingBPM = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text("\(Int(m.bpm))").font(.system(size: 64, weight: .bold, design: .rounded)).monospacedDigit()
+                        Image(systemName: "pencil").font(.title3).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .alert("Enter BPM", isPresented: $editingBPM) {
+                    TextField("30–280", text: $bpmText).keyboardType(.numberPad)
+                    Button("Cancel", role: .cancel) {}
+                    Button("Set") {
+                        if let v = Double(bpmText.filter(\.isNumber)) { m.bpm = min(max(v, 30), 280) }
+                    }
+                } message: { Text("Type a tempo from 30 to 280.") }
                 Text("BPM").font(.headline).foregroundStyle(.secondary)
                 Spacer()
-                Text(m.signature.unit == 4 ? "♩ = beat" : "♪ = beat")
+                Text(m.useCustom || m.signature.unit == 4 ? "♩ = beat" : "♪ = beat")
                     .font(.subheadline).foregroundStyle(.secondary)
             }
             Slider(value: $m.bpm, in: 30...280, step: 1)
@@ -87,7 +105,17 @@ struct ContentView: View {
 
     private var meterSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Time signature").font(.headline)
+            Picker("Bar", selection: $m.useCustom) {
+                Text("Time signature").tag(false)
+                Text("Custom bar").tag(true)
+            }
+            .pickerStyle(.segmented)
+            if m.useCustom { customSection } else { standardSection }
+        }
+    }
+
+    private var standardSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack {
                     ForEach(TimeSignature.all) { sig in
@@ -107,6 +135,40 @@ struct ContentView: View {
             }
             .pickerStyle(.segmented)
             Text(hint).font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    private func noteName(_ s: Subdivision) -> String {
+        switch s { case .quarter: "♩ 4th"; case .eighth: "♫ 8ths"; case .sixteenth: "𝅘𝅥𝅯 16ths" }
+    }
+
+    private var customSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pick the notes for each beat of your bar (up to 12 beats).")
+                .font(.footnote).foregroundStyle(.secondary)
+            ForEach(m.customBeats.indices, id: \.self) { i in
+                HStack {
+                    Text("Beat \(i + 1)").font(.headline).frame(width: 70, alignment: .leading)
+                    Picker("Beat \(i + 1)", selection: Binding(
+                        get: { m.customBeats[min(i, m.customBeats.count - 1)] },
+                        set: { if i < m.customBeats.count { m.customBeats[i] = $0 } })) {
+                        ForEach(Subdivision.allCases) { Text(noteName($0)).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+            HStack {
+                Button {
+                    if m.customBeats.count > 1 { m.customBeats.removeLast() }
+                } label: { Label("Remove beat", systemImage: "minus") }
+                .disabled(m.customBeats.count <= 1)
+                Spacer()
+                Button {
+                    if m.customBeats.count < 12 { m.customBeats.append(.quarter) }
+                } label: { Label("Add beat", systemImage: "plus") }
+                .disabled(m.customBeats.count >= 12)
+            }
+            .buttonStyle(.bordered)
         }
     }
 

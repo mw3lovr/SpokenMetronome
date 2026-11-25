@@ -39,13 +39,12 @@ struct Step: Equatable {
     let word: String?   // what gets spoken (nil = silent)
     let accent: Int     // 2 = downbeat, 1 = beat/group start, 0 = subdivision
     let display: String // what is shown on screen
+    let length: Double  // duration in beats of the BPM unit
+    var beat: Int = 0   // which beat of the bar this step belongs to
 }
 
 struct Pattern {
     let steps: [Step]
-    /// Length of each step, measured in beats of the BPM unit
-    /// (quarter notes for x/4, eighth notes for x/8).
-    let stepBeats: Double
 }
 
 enum Counting {
@@ -54,57 +53,35 @@ enum Counting {
     static let syllables = ["e", "and", "a"]
     static var allWords: [String] { numbers + syllables }
 
+    /// Standard bar: every beat uses the same subdivision.
     static func pattern(_ sig: TimeSignature, _ sub: Subdivision) -> Pattern {
-        simple(sig, sub)
-    }
-
-    /// x/4: beat = quarter note. "1 2 3 4", "1 & 2 &", "1 e & a".
-    private static func simple(_ sig: TimeSignature, _ sub: Subdivision) -> Pattern {
-        let per: Int = sub == .quarter ? 1 : (sub == .eighth ? 2 : 4)
-        // Accent group starts in x/8 (e.g. 6/8 = 1 and 4), every beat in x/4.
         var groupStarts = Set<Int>()
         var at = 1
         for len in sig.groups { groupStarts.insert(at); at += len }
-        var steps: [Step] = []
-        for b in 1...sig.beats {
-            for s in 0..<per {
-                if s == 0 {
-                    steps.append(Step(word: numbers[b - 1], accent: b == 1 ? 2 : (groupStarts.contains(b) ? 1 : 0), display: "\(b)"))
-                } else {
-                    let syl = per == 2 ? "and" : syllables[s - 1]
-                    steps.append(Step(word: syl, accent: 0, display: syl == "and" ? "&" : syl))
-                }
-            }
-        }
-        return Pattern(steps: steps, stepBeats: 1.0 / Double(per))
+        let accents = (1...sig.beats).map { $0 == 1 ? 2 : (groupStarts.contains($0) ? 1 : 0) }
+        return build(Array(repeating: sub, count: sig.beats), accents: accents)
     }
 
-    /// x/8: beat = eighth note.
-    /// 4th  -> clicks every eighth, speaks only the group pulses ("1 . . 2 . .")
-    /// 8th  -> speaks every eighth ("1 2 3 4 5 6")
-    /// 16th -> "1 & 2 & 3 & ..."
-    private static func compound(_ sig: TimeSignature, _ sub: Subdivision) -> Pattern {
-        var groupStarts: [Int: Int] = [:] // eighth index -> group number
-        var idx = 0
-        for (g, len) in sig.groups.enumerated() { groupStarts[idx] = g + 1; idx += len }
+    /// Custom bar: each beat has its own subdivision.
+    static func custom(_ beats: [Subdivision]) -> Pattern {
+        build(beats, accents: beats.indices.map { $0 == 0 ? 2 : 1 })
+    }
 
+    private static func build(_ beats: [Subdivision], accents: [Int]) -> Pattern {
         var steps: [Step] = []
-        for i in 0..<sig.beats {
-            let accent = i == 0 ? 2 : (groupStarts[i] != nil ? 1 : 0)
-            switch sub {
-            case .quarter:
-                if let g = groupStarts[i] {
-                    steps.append(Step(word: numbers[g - 1], accent: accent, display: "\(g)"))
+        for (i, sub) in beats.enumerated() {
+            let b = i + 1
+            let per = sub == .quarter ? 1 : (sub == .eighth ? 2 : 4)
+            let len = 1.0 / Double(per)
+            for s in 0..<per {
+                if s == 0 {
+                    steps.append(Step(word: numbers[i], accent: accents[i], display: "\(b)", length: len, beat: i))
                 } else {
-                    steps.append(Step(word: nil, accent: 0, display: "·"))
+                    let syl = per == 2 ? "and" : syllables[s - 1]
+                    steps.append(Step(word: syl, accent: 0, display: syl == "and" ? "&" : syl, length: len, beat: i))
                 }
-            case .eighth:
-                steps.append(Step(word: numbers[i], accent: accent, display: "\(i + 1)"))
-            case .sixteenth:
-                steps.append(Step(word: numbers[i], accent: accent, display: "\(i + 1)"))
-                steps.append(Step(word: "and", accent: 0, display: "&"))
             }
         }
-        return Pattern(steps: steps, stepBeats: sub == .sixteenth ? 0.5 : 1.0)
+        return Pattern(steps: steps)
     }
 }

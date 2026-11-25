@@ -9,6 +9,8 @@ final class MetronomeEngine: ObservableObject {
     func nudge(_ delta: Double) { bpm = min(max(bpm + delta, 30), 280) }
     @Published var signature = TimeSignature.all[0] { didSet { patternChanged() } }
     @Published var subdivision: Subdivision = .quarter { didSet { patternChanged() } }
+    @Published var useCustom = false { didSet { patternChanged() } }
+    @Published var customBeats: [Subdivision] = [.quarter, .eighth, .sixteenth, .quarter] { didSet { patternChanged() } }
     @Published var voiceOn = true
     @Published var clickOn = true
     @Published var voiceVolume: Float = 1.0
@@ -97,7 +99,7 @@ final class MetronomeEngine: ObservableObject {
     }
 
     private func patternChanged() {
-        pattern = Counting.pattern(signature, subdivision)
+        pattern = useCustom ? Counting.custom(customBeats) : Counting.pattern(signature, subdivision)
         syncSnapshot()
         queue.async { [weak self] in self?.snap.resetBar = true }
     }
@@ -112,7 +114,7 @@ final class MetronomeEngine: ObservableObject {
             let steps = snap.pattern.steps
             if stepIndex >= steps.count { stepIndex = 0 }
             let step = steps[stepIndex]
-            let stepSamples = sr * 60.0 / min(max(snap.bpm, 30), 280) * snap.pattern.stepBeats
+            let stepSamples = sr * 60.0 / min(max(snap.bpm, 30), 280) * step.length
             let when = AVAudioTime(sampleTime: AVAudioFramePosition(nextSample), atRate: sr)
 
             if snap.clickOn {
