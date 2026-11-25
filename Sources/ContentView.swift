@@ -111,18 +111,11 @@ struct ContentView: View {
     }
 
     private var hint: String {
-        if m.signature.unit == 4 {
-            switch m.subdivision {
-            case .quarter: return "Counts “1 2 3 4”."
-            case .eighth: return "Counts “1 and 2 and…”."
-            case .sixteenth: return "Counts “1 e and a 2 e and a…”."
-            }
-        }
-        let g = m.signature.groups.map(String.init).joined(separator: "+")
+        let n = m.signature.beats
         switch m.subdivision {
-        case .quarter: return "Speaks the main pulses (grouped \(g)); clicks every eighth."
-        case .eighth: return "Counts every eighth note, grouped \(g)."
-        case .sixteenth: return "Counts “1 and 2 and…” on every sixteenth."
+        case .quarter: return "Speaks every beat: “1 2 3 … \(n)”."
+        case .eighth: return "Speaks every 8th: “1 and 2 and … \(n) and”."
+        case .sixteenth: return "Speaks every 16th: “1 e and a 2 e and a …”."
         }
     }
 

@@ -55,17 +55,21 @@ enum Counting {
     static var allWords: [String] { numbers + syllables }
 
     static func pattern(_ sig: TimeSignature, _ sub: Subdivision) -> Pattern {
-        sig.unit == 4 ? simple(sig, sub) : compound(sig, sub)
+        simple(sig, sub)
     }
 
     /// x/4: beat = quarter note. "1 2 3 4", "1 & 2 &", "1 e & a".
     private static func simple(_ sig: TimeSignature, _ sub: Subdivision) -> Pattern {
         let per: Int = sub == .quarter ? 1 : (sub == .eighth ? 2 : 4)
+        // Accent group starts in x/8 (e.g. 6/8 = 1 and 4), every beat in x/4.
+        var groupStarts = Set<Int>()
+        var at = 1
+        for len in sig.groups { groupStarts.insert(at); at += len }
         var steps: [Step] = []
         for b in 1...sig.beats {
             for s in 0..<per {
                 if s == 0 {
-                    steps.append(Step(word: numbers[b - 1], accent: b == 1 ? 2 : 1, display: "\(b)"))
+                    steps.append(Step(word: numbers[b - 1], accent: b == 1 ? 2 : (groupStarts.contains(b) ? 1 : 0), display: "\(b)"))
                 } else {
                     let syl = per == 2 ? "and" : syllables[s - 1]
                     steps.append(Step(word: syl, accent: 0, display: syl == "and" ? "&" : syl))
