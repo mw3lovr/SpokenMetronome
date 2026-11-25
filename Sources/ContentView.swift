@@ -61,12 +61,12 @@ struct ContentView: View {
             }
             Slider(value: $m.bpm, in: 30...280, step: 1)
             HStack {
-                stepper("−5") { m.bpm -= 5 }
-                stepper("−1") { m.bpm -= 1 }
+                stepper("−5") { m.nudge(-5) }
+                stepper("−1") { m.nudge(-1) }
                 Button("Tap") { tap() }
                     .buttonStyle(.bordered).frame(maxWidth: .infinity)
-                stepper("+1") { m.bpm += 1 }
-                stepper("+5") { m.bpm += 5 }
+                stepper("+1") { m.nudge(1) }
+                stepper("+5") { m.nudge(5) }
             }
         }
     }
@@ -80,7 +80,7 @@ struct ContentView: View {
         taps = taps.filter { now.timeIntervalSince($0) < 2.5 } + [now]
         guard taps.count >= 2 else { return }
         let gaps = zip(taps.dropFirst(), taps).map { $0.timeIntervalSince($1) }
-        m.bpm = (60 / (gaps.reduce(0, +) / Double(gaps.count))).rounded()
+        m.bpm = min(max((60 / (gaps.reduce(0, +) / Double(gaps.count))).rounded(), 30), 280)
     }
 
     // MARK: Meter

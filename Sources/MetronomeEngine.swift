@@ -4,7 +4,9 @@ import SwiftUI
 /// Sample-accurate metronome: a background timer looks ~150 ms ahead and schedules
 /// click and voice buffers on two AVAudioPlayerNodes that share one timeline.
 final class MetronomeEngine: ObservableObject {
-    @Published var bpm: Double = 100 { didSet { bpm = min(max(bpm, 30), 280) } }
+    @Published var bpm: Double = 100
+
+    func nudge(_ delta: Double) { bpm = min(max(bpm + delta, 30), 280) }
     @Published var signature = TimeSignature.all[0] { didSet { patternChanged() } }
     @Published var subdivision: Subdivision = .quarter { didSet { patternChanged() } }
     @Published var voiceOn = true
@@ -110,7 +112,7 @@ final class MetronomeEngine: ObservableObject {
             let steps = snap.pattern.steps
             if stepIndex >= steps.count { stepIndex = 0 }
             let step = steps[stepIndex]
-            let stepSamples = sr * 60.0 / snap.bpm * snap.pattern.stepBeats
+            let stepSamples = sr * 60.0 / min(max(snap.bpm, 30), 280) * snap.pattern.stepBeats
             let when = AVAudioTime(sampleTime: AVAudioFramePosition(nextSample), atRate: sr)
 
             if snap.clickOn {
