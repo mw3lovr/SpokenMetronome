@@ -72,7 +72,9 @@ final class Coach: ObservableObject {
                     Talk like a real person out loud: casual, warm, short, contractions, no lists, no emojis, \
                     no markdown, no headings. Two sentences max. Don't read the numbers back like a report; \
                     mention at most one number. First say naturally whether they passed the step, \
-                    then give one simple feel-based tip. Early kicks mean rushing, late kicks mean dragging.
+                    then give honest constructive criticism: name the one biggest problem and one specific way \
+                    to practice it (for example slowing down 10 BPM, counting out loud, relaxing the ankle). \
+                    Don't only praise, even on a good run. Early kicks mean rushing, late kicks mean dragging.
                     """,
                     generateParameters: GenerateParameters(maxTokens: 60, temperature: 0.8))
                 let reply = try await session.respond(to: facts(s))
@@ -154,17 +156,28 @@ final class Coach: ObservableObject {
             parts.append(pick(["Nice work, that's \(s.reps) reps at \(s.bpm).", "Good set."]))
         }
 
-        if let m = s.meanSignedMs, abs(m) >= 8 {
+        // Constructive criticism: always one specific fix and how to practice it.
+        let slower = max(30, (s.outcome?.stepBPM ?? s.bpm) - 10)
+        if s.missed > 0 {
+            parts.append(pick(["You dropped \(s.missed) kick\(s.missed == 1 ? "" : "s"). Slow it down to \(slower) and make sure every single one lands before speeding back up.",
+                               "A few kicks went missing. Count the pattern out loud while you play so you don't lose your place."]))
+        } else if let m = s.meanSignedMs, abs(m) >= 8 {
             parts.append(m > 0
-                ? pick(["You're sitting a little behind the beat, so lean forward just a touch.",
-                        "You're dragging slightly. Think about landing right on top of the click."])
-                : pick(["You're rushing a bit. Relax and let the beat come to you.",
-                        "You're a little ahead of the click. Breathe and sit back into it."]))
-        } else if s.meanSignedMs != nil, pct >= 0.6 {
-            parts.append(pick(["Your timing's right in the pocket.", "Your feel is nice and centered."]))
-        }
-        if let sp = s.spreadMs, sp > 20 {
-            parts.append(pick(["Try to make every kick feel the same.", "Work on keeping each hit even."]))
+                ? pick(["The main thing: you're landing late, about \(Int(m)) milliseconds behind. Try playing the next round with your heel up and think of hitting right on top of the click.",
+                        "You're dragging, so the kicks sit just behind the beat. Turn on click only, and aim to bury the click under your kick."])
+                : pick(["The main thing: you're rushing, about \(Int(-m)) milliseconds early. Relax your ankle, breathe out, and let the click come to you.",
+                        "You're jumping ahead of the click. Do a set at \(slower) and focus on waiting for each beat."]))
+        } else if let sp = s.spreadMs, sp > 15 {
+            parts.append(pick(["Your average is fine, but the hits are uneven, some early, some late. Do a round at \(slower) and make every kick feel identical.",
+                               "Consistency is the thing to work on. Keep the same motion and volume on every kick."]))
+        } else if s.cleanReps == nil {
+            parts.append("Turn on kick check next time so I can tell you exactly what to fix.")
+        } else if pct < 1 {
+            parts.append(pick(["To tighten it up, keep your foot relaxed between hits instead of resting it on the head.",
+                               "Next, try it with click only and no voice, so you're relying on your own counting."]))
+        } else {
+            parts.append(pick(["Perfect run. To push yourself, try it once at \(s.bpm + 5) to stretch your control.",
+                               "Flawless. Now try it with the click on 8ths only and keep that same feel."]))
         }
         return parts.joined(separator: " ")
     }
