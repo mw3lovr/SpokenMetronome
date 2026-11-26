@@ -1,6 +1,7 @@
 import AVFoundation
 import AudioToolbox
 import SwiftUI
+import Combine
 
 /// Sample-accurate metronome: a background timer looks ~150 ms ahead and schedules
 /// click and voice buffers on two AVAudioPlayerNodes that share one timeline.
@@ -135,7 +136,46 @@ final class MetronomeEngine: ObservableObject {
             default: requestMic { [weak self] ok in if !ok { self?.listenOn = false } }
             }
         }
+        loadSettings()
+        settingsSaver = objectWillChange
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.saveSettings() }
         reloadVoice()
+    }
+
+    // MARK: - Remember settings
+
+    private var settingsSaver: AnyCancellable?
+
+    private struct Saved: Codable {
+        var bpm: Double; var beats: Int; var unit: Int; var subdivision: String
+        var useCustom: Bool; var customBeats: [String]; var voiceVolume: Float
+        var loopOn: Bool; var reps: Int; var barsPerRep: Int
+        var toleranceMs: Double; var sensitivity: Float; var kickSteps: [Int]
+    }
+
+    private func saveSettings() {
+        let s = Saved(bpm: bpm, beats: signature.beats, unit: signature.unit, subdivision: subdivision.rawValue,
+                      useCustom: useCustom, customBeats: customBeats.map(\.rawValue), voiceVolume: voiceVolume,
+                      loopOn: loopOn, reps: reps, barsPerRep: barsPerRep,
+                      toleranceMs: toleranceMs, sensitivity: sensitivity, kickSteps: Array(kickSteps))
+        if let d = try? JSONEncoder().encode(s) { UserDefaults.standard.set(d, forKey: "metronomeSettings") }
+    }
+
+    private func loadSettings() {
+        guard let d = UserDefaults.standard.data(forKey: "metronomeSettings"),
+              let s = try? JSONDecoder().decode(Saved.self, from: d) else { return }
+        bpm = min(max(s.bpm, 30), 280)
+        signature = TimeSignature.all.first { $0.beats == s.beats && $0.unit == s.unit } ?? signature
+        subdivision = Subdivision(rawValue: s.subdivision) ?? subdivision
+        let cb = s.customBeats.compactMap(Subdivision.init(rawValue:))
+        if !cb.isEmpty { customBeats = cb }
+        useCustom = s.useCustom
+        voiceVolume = s.voiceVolume
+        loopOn = s.loopOn; reps = max(1, s.reps); barsPerRep = max(1, s.barsPerRep)
+        toleranceMs = s.toleranceMs; sensitivity = s.sensitivity
+        kickSteps = Set(s.kickSteps)          // after pattern settings, which clear it
+        syncSnapshot()
     }
 
     /// Re-record the spoken counts with the chosen voice.
