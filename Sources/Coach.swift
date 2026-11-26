@@ -160,11 +160,11 @@ final class Coach: ObservableObject {
                                    "You got it. Step passed, so next time we're going to \(o.nextBPM ?? o.stepBPM).",
                                    "That was solid. You earned the next step, \(o.nextBPM ?? o.stepBPM)."]))
             } else if o.got >= o.needed - 2 {
-                parts.append(pick(["So close. \(o.got) out of \(o.needed). One more round and you've got it.",
-                                   "Almost there, just a couple short. Run it again at \(o.stepBPM)."]))
+                parts.append(pick(["So close, \(o.got) out of \(o.needed).",
+                                   "Almost there, just a couple short."]))
             } else {
-                parts.append(pick(["Not quite yet. \(o.got) out of \(o.needed) clean. Let's stay at \(o.stepBPM) a bit longer.",
-                                   "That one was a little rough, and that's fine. We'll keep working \(o.stepBPM)."]))
+                parts.append(pick(["Not quite yet, \(o.got) out of \(o.needed) clean.",
+                                   "That one was a little rough, and that's fine."]))
             }
         } else if s.cleanReps != nil {
             parts.append(pct >= 0.9 ? pick(["That felt really locked in.", "Really clean, nice job."]) :
