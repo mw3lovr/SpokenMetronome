@@ -41,9 +41,6 @@ final class MetronomeEngine: ObservableObject {
     @Published var sensitivity: Float = 0.5 { didSet { pushDetector() } }
     @Published var calibrationMs: Double = 0 { didSet { pushDetector() } }
     @Published private(set) var calibrating = false
-    @Published private(set) var micLevel: Float = 0
-    @Published private(set) var marks: [Int: HitMark] = [:]
-    @Published private(set) var lastHit: Double?
     @Published private(set) var repResults: [RepResult] = []
     @Published var micDenied = false
     private lazy var detector = KickDetector(queue: queue)
@@ -63,7 +60,13 @@ final class MetronomeEngine: ObservableObject {
 
     @Published private(set) var isPlaying = false
     @Published private(set) var isReady = false
-    @Published private(set) var currentStep = -1
+    /// Fast-changing playback state lives in its own object, so only the
+    /// few views that show it redraw on every count (keeps the UI smooth).
+    let live = LiveState()
+    var currentStep: Int { live.currentStep }
+    var marks: [Int: HitMark] { live.marks }
+    var lastHit: Double? { live.lastHit }
+    var micLevel: Float { live.micLevel }
     @Published private(set) var pattern = Counting.pattern(TimeSignature.all[0], .quarter)
 
     private let engine = AVAudioEngine()
@@ -114,13 +117,13 @@ final class MetronomeEngine: ObservableObject {
         if let saved = UserDefaults.standard.object(forKey: "kickCalibrationMs") as? Double { calibrationMs = saved }
         detector.onMark = { [weak self] step, mark in
             guard let self, self.isPlaying else { return }
-            self.marks[step] = mark
-            if case .hit(let ms) = mark { self.lastHit = ms }
+            self.live.marks[step] = mark
+            if case .hit(let ms) = mark { self.live.lastHit = ms }
         }
         detector.onRep = { [weak self] r in self?.repResults.append(r) }
         detector.onLevel = { [weak self] lv in
-            guard let self, abs(self.micLevel - lv) > 0.03 else { return }
-            self.micLevel = (lv * 20).rounded() / 20
+            guard let self, abs(self.live.micLevel - lv) > 0.03 else { return }
+            self.live.micLevel = (lv * 20).rounded() / 20
         }
         detector.onCalibrated = { [weak self] ms in
             self?.calibrating = false
@@ -141,6 +144,15 @@ final class MetronomeEngine: ObservableObject {
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.saveSettings() }
         reloadVoice()
+    }
+
+    /// Voice processing changes the output format; re-wire the players so audio isn't garbled.
+    private func reconnectPlayers() {
+        clickNode.stop(); voiceNode.stop()
+        engine.disconnectNodeOutput(clickNode); engine.disconnectNodeOutput(voiceNode)
+        engine.connect(clickNode, to: engine.mainMixerNode, format: format)
+        engine.connect(voiceNode, to: engine.mainMixerNode, format: format)
+        engine.prepare()
     }
 
     // MARK: - Remember settings
@@ -250,6 +262,7 @@ final class MetronomeEngine: ObservableObject {
             if !engine.inputNode.isVoiceProcessingEnabled {
                 try? engine.inputNode.setVoiceProcessingEnabled(true)
             }
+            reconnectPlayers()
             engine.inputNode.isVoiceProcessingAGCEnabled = false
             engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
                 .init(enableAdvancedDucking: false, duckingLevel: .min)
@@ -258,12 +271,13 @@ final class MetronomeEngine: ObservableObject {
             detector.remove(from: engine)
             if engine.inputNode.isVoiceProcessingEnabled {
                 engine.stop(); try? engine.inputNode.setVoiceProcessingEnabled(false)
+                reconnectPlayers()
             }
             try? session.setCategory(.playback, mode: .default)
             try? session.setActive(true)
         }
         outLatency = session.outputLatency + session.ioBufferDuration
-        marks = [:]; lastHit = nil; repResults = []
+        live.marks = [:]; live.lastHit = nil; repResults = []
         queue.sync { detector.reset() }
         do { try engine.start() } catch { return }
         syncSnapshot()
@@ -297,7 +311,7 @@ final class MetronomeEngine: ObservableObject {
         clickNode.stop(); voiceNode.stop()
         engine.pause()
         isPlaying = false
-        currentStep = -1
+        live.currentStep = -1
     }
 
     /// Push UI settings to the scheduler thread.
@@ -407,7 +421,7 @@ final class MetronomeEngine: ObservableObject {
             let delay = max(0, (nextSample - now) / sr)
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 guard let self, self.isPlaying else { return }
-                self.currentStep = idx
+                self.live.currentStep = idx
             }
 
             nextSample += stepSamples
@@ -448,4 +462,19 @@ final class MetronomeEngine: ObservableObject {
         b.frameLength = AVAudioFrameCount(n)
         return b
     }
+}
+
+
+final class LiveState: ObservableObject {
+    @Published var currentStep = -1
+    @Published var marks: [Int: HitMark] = [:]
+    @Published var lastHit: Double?
+    @Published var micLevel: Float = 0
+}
+
+/// Re-draws only its content when the live playback state changes.
+struct LiveView<Content: View>: View {
+    @ObservedObject var live: LiveState
+    @ViewBuilder let content: () -> Content
+    var body: some View { content() }
 }

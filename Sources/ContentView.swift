@@ -130,17 +130,19 @@ struct MetronomeView: View {
         ZStack {
             LinearGradient(colors: [Theme.bgTop, Theme.bgBottom], startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
-            RadialGradient(colors: [(current.map { Theme.color($0.accent) } ?? Theme.sub).opacity(m.isPlaying ? 0.28 : 0.12), .clear],
-                           center: .top, startRadius: 10, endRadius: 420)
-                .ignoresSafeArea()
-                .animation(.easeOut(duration: 0.15), value: m.currentStep)
+            LiveView(live: m.live) {
+                RadialGradient(colors: [(current.map { Theme.color($0.accent) } ?? Theme.sub).opacity(m.isPlaying ? 0.28 : 0.12), .clear],
+                               center: .top, startRadius: 10, endRadius: 420)
+                    .animation(.easeOut(duration: 0.15), value: m.currentStep)
+            }
+            .ignoresSafeArea()
 
             ScrollView {
                 VStack(spacing: 18) {
                     header
-                    hero
-                    beatStrip
-                    kickFeedback
+                    LiveView(live: m.live) { hero }
+                    LiveView(live: m.live) { beatStrip }
+                    LiveView(live: m.live) { kickFeedback }
                     tempoCard
                     goalBanner
                     loopCard
@@ -473,13 +475,13 @@ struct MetronomeView: View {
 
                 HStack {
                     Text("Mic").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
-                    GeometryReader { g in
+                    LiveView(live: m.live) { GeometryReader { g in
                         Capsule().fill(Color.white.opacity(0.08))
                             .overlay(alignment: .leading) {
                                 Capsule().fill(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
                                     .frame(width: g.size.width * CGFloat(m.isPlaying ? m.micLevel : 0))
                             }
-                    }
+                    } }
                     .frame(height: 8)
                 }
                 HStack {
