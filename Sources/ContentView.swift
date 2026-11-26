@@ -179,8 +179,9 @@ struct MetronomeView: View {
     // MARK: Hero — big pulsing count
 
     private var hero: some View {
-        let color = current.map { Theme.color($0.accent) } ?? Theme.dim
-        let text = current?.display ?? (m.isReady ? "Ready" : "…")
+        let cd = m.countdownRemaining
+        let color = cd != nil ? Theme.down : (current.map { Theme.color($0.accent) } ?? Theme.dim)
+        let text = cd.map(String.init) ?? current?.display ?? (m.isReady ? "Ready" : "…")
         return ZStack {
             Circle().stroke(Theme.stroke, lineWidth: 14)
             Circle()
@@ -195,7 +196,7 @@ struct MetronomeView: View {
                 .padding(26)
             VStack(spacing: 4) {
                 Text(text)
-                    .font(.system(size: current == nil ? 40 : 96, weight: .heavy, design: .rounded))
+                    .font(.system(size: (current == nil && cd == nil) ? 40 : (cd != nil ? 120 : 96), weight: .heavy, design: .rounded))
                     .foregroundStyle(color)
                     .contentTransition(.numericText())
                     .scaleEffect(m.isPlaying && current?.accent ?? 0 > 0 ? 1.08 : 1)
@@ -210,6 +211,7 @@ struct MetronomeView: View {
     }
 
     private var heroCaption: String {
+        if m.countdownRemaining != nil { return "get ready…" }
         guard m.isPlaying else { return m.loopOn ? "\(m.reps) reps ready" : "tap start" }
         if m.loopOn {
             let per = max(m.barsPerRep, 1)
@@ -241,6 +243,16 @@ struct MetronomeView: View {
 
     private var loopCard: some View {
         Card(title: "Loop", icon: "repeat") {
+            HStack(spacing: 8) {
+                Image(systemName: "timer").foregroundStyle(Theme.dim)
+                Text("Count-down").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                Spacer(minLength: 4)
+                ForEach([0, 3, 5, 10], id: \.self) { sec in
+                    Chip(text: sec == 0 ? "Off" : "\(sec)s", selected: m.countdownSeconds == sec, tint: Theme.down) {
+                        m.countdownSeconds = sec
+                    }
+                }
+            }
             HStack(spacing: 10) {
                 Button { m.loopOn.toggle() } label: {
                     Label(m.loopOn ? "Loop on" : "Loop off", systemImage: m.loopOn ? "repeat.circle.fill" : "repeat")
@@ -650,14 +662,16 @@ struct MetronomeView: View {
     private var playButton: some View {
         Button { m.toggle() } label: {
             HStack(spacing: 10) {
-                Image(systemName: m.isPlaying ? "stop.fill" : "play.fill")
-                Text(m.isReady ? (m.isPlaying ? "Stop" : "Start") : "Loading voice…")
+                Image(systemName: (m.isPlaying || m.countdownRemaining != nil) ? "stop.fill" : "play.fill")
+                Text(!m.isReady ? "Loading voice…"
+                     : m.countdownRemaining.map { "Cancel (\($0))" }
+                     ?? (m.isPlaying ? "Stop" : (m.countdownSeconds > 0 ? "Start in \(m.countdownSeconds)s" : "Start")))
             }
             .font(.system(.title3, design: .rounded).weight(.heavy))
             .foregroundStyle(.black)
             .frame(maxWidth: .infinity, minHeight: 60)
             .background(
-                Capsule().fill(m.isPlaying
+                Capsule().fill(m.isPlaying || m.countdownRemaining != nil
                     ? LinearGradient(colors: [Color(red: 1, green: 0.35, blue: 0.4), Theme.down], startPoint: .leading, endPoint: .trailing)
                     : LinearGradient(colors: [Theme.beat, Theme.sub], startPoint: .leading, endPoint: .trailing))
             )

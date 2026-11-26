@@ -118,7 +118,52 @@ final class MetronomeEngine: ObservableObject {
         }
     }
 
-    func toggle() { isPlaying ? stop() : start() }
+    // Count-down before starting
+    @Published var countdownSeconds: Int = UserDefaults.standard.integer(forKey: "countdownSeconds") {
+        didSet { UserDefaults.standard.set(countdownSeconds, forKey: "countdownSeconds") }
+    }
+    @Published private(set) var countdownRemaining: Int?
+    private var countdownTimer: Timer?
+    private let countdownVoice = AVSpeechSynthesizer()
+
+    func toggle() {
+        if isPlaying { stop() }
+        else if countdownRemaining != nil { cancelCountdown() }
+        else if countdownSeconds > 0 { beginCountdown() }
+        else { start() }
+    }
+
+    private func beginCountdown() {
+        countdownRemaining = countdownSeconds
+        say(countdownSeconds)
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
+            guard let self, let left = self.countdownRemaining else { t.invalidate(); return }
+            if left <= 1 {
+                t.invalidate()
+                self.countdownTimer = nil
+                self.countdownRemaining = nil
+                self.start()
+            } else {
+                self.countdownRemaining = left - 1
+                self.say(left - 1)
+            }
+        }
+    }
+
+    func cancelCountdown() {
+        countdownTimer?.invalidate(); countdownTimer = nil
+        countdownRemaining = nil
+        countdownVoice.stopSpeaking(at: .immediate)
+    }
+
+    private func say(_ n: Int) {
+        guard voiceOn else { return }
+        let u = AVSpeechUtterance(string: "\(n)")
+        u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
+        u.voice = AVSpeechSynthesisVoice(language: "en-US")
+        countdownVoice.stopSpeaking(at: .immediate)
+        countdownVoice.speak(u)
+    }
 
     func start() {
         guard !isPlaying else { return }
