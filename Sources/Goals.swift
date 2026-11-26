@@ -21,6 +21,11 @@ struct PracticeSession: Identifiable, Codable, Hashable {
     var reps: Int
     var bars: Int
     var minutes: Double
+    var cleanReps: Int? = nil      // set when Kick check was on
+    var avgErrorMs: Double? = nil
+    var spreadMs: Double? = nil
+    /// Reps that count toward goals: clean reps if the mic was listening.
+    var countedReps: Int { cleanReps ?? reps }
 }
 
 final class GoalStore: ObservableObject {
@@ -59,7 +64,7 @@ final class GoalStore: ObservableObject {
 
     func sessions(for g: Goal) -> [PracticeSession] { sessions.filter { $0.goalID == g.id } }
 
-    func bestBPM(_ g: Goal) -> Int { sessions(for: g).filter { $0.reps > 0 }.map(\.bpm).max() ?? g.startBPM }
+    func bestBPM(_ g: Goal) -> Int { sessions(for: g).filter { $0.countedReps > 0 }.map(\.bpm).max() ?? g.startBPM }
 
     func progress(_ g: Goal) -> Double {
         let span = Double(g.targetBPM - g.startBPM)
@@ -68,13 +73,13 @@ final class GoalStore: ObservableObject {
     }
 
     func repsToday(_ g: Goal) -> Int {
-        sessions(for: g).filter { Calendar.current.isDateInToday($0.date) }.reduce(0) { $0 + $1.reps }
+        sessions(for: g).filter { Calendar.current.isDateInToday($0.date) }.reduce(0) { $0 + $1.countedReps }
     }
 
     /// Consecutive days (ending today or yesterday) with at least one rep.
     func streak(_ g: Goal) -> Int {
         let cal = Calendar.current
-        let days = Set(sessions(for: g).filter { $0.reps > 0 }.map { cal.startOfDay(for: $0.date) })
+        let days = Set(sessions(for: g).filter { $0.countedReps > 0 }.map { cal.startOfDay(for: $0.date) })
         var day = cal.startOfDay(for: Date())
         if !days.contains(day) { day = cal.date(byAdding: .day, value: -1, to: day)! }
         var n = 0
@@ -146,7 +151,7 @@ struct GoalsView: View {
         let active = store.activeGoalID == g.id
         let best = store.bestBPM(g)
         let today = store.repsToday(g)
-        let data = store.sessions(for: g).filter { $0.reps > 0 }.reversed()
+        let data = store.sessions(for: g).filter { $0.countedReps > 0 }.reversed()
         return VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top) {
                 ZStack {
@@ -228,8 +233,15 @@ struct GoalsView: View {
                             .font(.caption).foregroundStyle(Theme.dim)
                     }
                     Spacer()
-                    Text("\(s.reps) reps").font(.system(.subheadline, design: .rounded).weight(.bold))
-                        .foregroundStyle(Theme.beat)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(s.cleanReps.map { "\($0)/\(s.reps) clean" } ?? "\(s.reps) reps")
+                            .font(.system(.subheadline, design: .rounded).weight(.bold))
+                            .foregroundStyle(s.cleanReps == nil ? Theme.beat : .green)
+                        if let e = s.avgErrorMs {
+                            Text("avg \(Int(e)) ms off" + (s.spreadMs.map { " · ±\(Int($0))" } ?? ""))
+                                .font(.caption2).foregroundStyle(Theme.dim)
+                        }
+                    }
                 }
                 .contextMenu {
                     Button("Delete", role: .destructive) { store.sessions.removeAll { $0.id == s.id } }

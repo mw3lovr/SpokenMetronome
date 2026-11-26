@@ -23,6 +23,32 @@ final class MetronomeEngine: ObservableObject {
     /// Called when playback ends (finished loop or manual stop) with bars completed.
     var onSessionEnd: ((_ bars: Int, _ finished: Bool) -> Void)?
 
+    // Kick listening
+    @Published var listenOn = false
+    @Published var kickTarget: KickTarget = .everyBeat
+    @Published var kickSteps: Set<Int> = []           // for .pattern
+    @Published var toleranceMs: Double = 25 { didSet { pushDetector() } }
+    @Published var sensitivity: Float = 0.5 { didSet { pushDetector() } }
+    @Published var calibrationMs: Double = 0 { didSet { pushDetector() } }
+    @Published private(set) var calibrating = false
+    @Published private(set) var micLevel: Float = 0
+    @Published private(set) var marks: [Int: HitMark] = [:]
+    @Published private(set) var lastHit: Double?
+    @Published private(set) var repResults: [RepResult] = []
+    @Published var micDenied = false
+    private lazy var detector = KickDetector(queue: queue)
+    private var hostStart: Double = 0
+    private var outLatency: Double = 0
+
+    var cleanReps: Int { repResults.filter(\.clean).count }
+    private var allErrors: [Double] { repResults.flatMap(\.errors) }
+    var sessionMeanAbs: Double? { allErrors.isEmpty ? nil : allErrors.map(abs).reduce(0, +) / Double(allErrors.count) }
+    var sessionSpread: Double? {
+        let e = allErrors; guard e.count > 1 else { return nil }
+        let mean = e.reduce(0, +) / Double(e.count)
+        return (e.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(e.count - 1)).squareRoot()
+    }
+
     @Published private(set) var isPlaying = false
     @Published private(set) var isReady = false
     @Published private(set) var currentStep = -1
@@ -55,6 +81,10 @@ final class MetronomeEngine: ObservableObject {
         var voiceOn = true, clickOn = true
         var resetBar = false
         var totalBars: Int? = nil
+        var listen = false
+        var kickTarget: KickTarget = .everyBeat
+        var kickSteps: Set<Int> = []
+        var barsPerRep = 1
     }
 
     init() {
@@ -65,6 +95,20 @@ final class MetronomeEngine: ObservableObject {
         engine.connect(clickNode, to: engine.mainMixerNode, format: format)
         engine.connect(voiceNode, to: engine.mainMixerNode, format: format)
         clicks = [makeClick(freq: 900, gain: 0.35), makeClick(freq: 1300, gain: 0.55), makeClick(freq: 1800, gain: 0.8)]
+        if let saved = UserDefaults.standard.object(forKey: "kickCalibrationMs") as? Double { calibrationMs = saved }
+        detector.onMark = { [weak self] step, mark in
+            guard let self, self.isPlaying else { return }
+            self.marks[step] = mark
+            if case .hit(let ms) = mark { self.lastHit = ms }
+        }
+        detector.onRep = { [weak self] r in self?.repResults.append(r) }
+        detector.onLevel = { [weak self] lv in self?.micLevel = lv }
+        detector.onCalibrated = { [weak self] ms in
+            self?.calibrating = false
+            self?.calibrationMs = ms
+            UserDefaults.standard.set(ms, forKey: "kickCalibrationMs")
+        }
+        pushDetector()
         let bank = voices
         Task { [weak self] in
             await bank.load(Counting.allWords)
@@ -78,11 +122,28 @@ final class MetronomeEngine: ObservableObject {
 
     func start() {
         guard !isPlaying else { return }
+        let session = AVAudioSession.sharedInstance()
+        if listenOn {
+            try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+            try? session.setPreferredIOBufferDuration(0.005)
+            try? session.setActive(true)
+            detector.install(on: engine)
+        } else {
+            detector.remove(from: engine)
+            try? session.setCategory(.playback, mode: .default)
+            try? session.setActive(true)
+        }
+        outLatency = session.outputLatency + session.ioBufferDuration
+        marks = [:]; lastHit = nil; repResults = []
+        queue.sync { detector.reset() }
         do { try engine.start() } catch { return }
         syncSnapshot()
         queue.sync { nextSample = sr * 0.05; stepIndex = 0; qBars = 0; startedBar = false; finishing = false }
         barsDone = 0
         let startAt = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05))
+        hostStart = AVAudioTime.seconds(forHostTime: startAt.hostTime)
+        let hs = hostStart, ol = outLatency
+        queue.sync { self.qHostStart = hs; self.qOutLatency = ol }
         clickNode.play(at: startAt)
         voiceNode.play(at: startAt)
         let t = DispatchSource.makeTimerSource(queue: queue)
@@ -98,7 +159,12 @@ final class MetronomeEngine: ObservableObject {
     private func end(finished: Bool) {
         guard isPlaying else { return }
         timer?.cancel(); timer = nil
-        onSessionEnd?(barsDone, finished)
+        let now = AVAudioTime.seconds(forHostTime: mach_absolute_time())
+        queue.sync { if snap.listen { detector.finish(now: now) } }
+        let bars = barsDone
+        DispatchQueue.main.async { [weak self] in self?.onSessionEnd?(bars, finished) }
+        calibrating = false
+        if listenOn { detector.remove(from: engine) }
         clickNode.stop(); voiceNode.stop()
         engine.pause()
         isPlaying = false
@@ -109,25 +175,67 @@ final class MetronomeEngine: ObservableObject {
     func syncSnapshot() {
         let p = pattern, b = bpm, v = voiceOn, c = clickOn
         let total: Int? = loopOn ? max(reps, 1) * max(barsPerRep, 1) : nil
+        let li = listenOn, kt = kickTarget, ks = kickSteps, bpr = loopOn ? max(barsPerRep, 1) : 1
         voiceNode.volume = voiceVolume
         queue.async { [weak self] in
             guard let self else { return }
             self.snap.pattern = p; self.snap.bpm = b
             self.snap.voiceOn = v; self.snap.clickOn = c
             self.snap.totalBars = total
+            self.snap.listen = li; self.snap.kickTarget = kt
+            self.snap.kickSteps = ks; self.snap.barsPerRep = bpr
         }
     }
 
     private func patternChanged() {
         pattern = useCustom ? Counting.custom(customBeats) : Counting.pattern(signature, subdivision)
+        kickSteps = []
         syncSnapshot()
         queue.async { [weak self] in self?.snap.resetBar = true }
+    }
+
+    func toggleKickStep(_ i: Int) {
+        if kickSteps.contains(i) { kickSteps.remove(i) } else { kickSteps.insert(i) }
+        syncSnapshot()
+    }
+
+    func calibrate() {
+        calibrating = true
+        queue.async { [weak self] in self?.detector.startCalibration() }
+    }
+
+    func requestMic(_ done: @escaping (Bool) -> Void) {
+        AVAudioApplication.requestRecordPermission { ok in
+            DispatchQueue.main.async { self.micDenied = !ok; done(ok) }
+        }
+    }
+
+    private func pushDetector() {
+        let t = toleranceMs, s = sensitivity, c = calibrationMs
+        queue.async { [weak self] in
+            self?.detector.toleranceMs = t; self?.detector.sensitivity = s; self?.detector.calibrationMs = c
+        }
+    }
+
+    private var qHostStart: Double = 0
+    private var qOutLatency: Double = 0
+
+    private func isKickTarget(_ i: Int, _ step: Step) -> Bool {
+        switch snap.kickTarget {
+        case .everyBeat: return step.word.map { Counting.numbers.contains($0) } ?? false
+        case .everyCount: return step.word != nil
+        case .pattern: return snap.kickSteps.contains(i)
+        }
     }
 
     // MARK: - Scheduling (runs on `queue`)
 
     private func tick() {
         if finishing { return }
+        if snap.listen {
+            detector.sweep(now: AVAudioTime.seconds(forHostTime: mach_absolute_time()),
+                           currentRep: qBars / max(snap.barsPerRep, 1))
+        }
         let now = currentSample()
         let horizon = now + sr * 0.15
         while nextSample < horizon {
@@ -158,6 +266,12 @@ final class MetronomeEngine: ObservableObject {
             }
             if snap.voiceOn, let w = step.word, let buf = trimmed(w, maxFrames: Int(stepSamples * 0.92)) {
                 voiceNode.scheduleBuffer(buf, at: when, options: [], completionHandler: nil)
+            }
+
+            if snap.listen && isKickTarget(stepIndex, step) {
+                detector.expect(time: qHostStart + nextSample / sr + qOutLatency,
+                                step: stepIndex, rep: qBars / max(snap.barsPerRep, 1),
+                                stepSeconds: stepSamples / sr)
             }
 
             let idx = stepIndex

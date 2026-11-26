@@ -12,6 +12,7 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Metronome
+        NSMicrophoneUsageDescription: Listens to your kick drum to check that every hit lands on the beat.
         UILaunchScreen: {}
         UIBackgroundModes: [audio]
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]

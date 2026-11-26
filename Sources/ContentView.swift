@@ -89,7 +89,10 @@ struct ContentView: View {
                     bpm: Int(m.bpm),
                     meter: m.useCustom ? "Custom" : m.signature.label,
                     reps: reps, bars: bars,
-                    minutes: Date().timeIntervalSince(startedAt) / 60))
+                    minutes: Date().timeIntervalSince(startedAt) / 60,
+                    cleanReps: m.listenOn ? m.cleanReps : nil,
+                    avgErrorMs: m.listenOn ? m.sessionMeanAbs : nil,
+                    spreadMs: m.listenOn ? m.sessionSpread : nil))
             }
         }
     }
@@ -122,9 +125,11 @@ struct MetronomeView: View {
                     header
                     hero
                     beatStrip
+                    kickFeedback
                     tempoCard
                     goalBanner
                     loopCard
+                    listenCard
                     meterCard
                     soundCard
                     Color.clear.frame(height: 90)
@@ -305,12 +310,163 @@ struct MetronomeView: View {
                                     .fill(on ? Theme.color(s.accent) : Color.white.opacity(s.accent > 0 ? 0.10 : 0.05))
                                     .shadow(color: on ? Theme.color(s.accent).opacity(0.8) : .clear, radius: 8)
                             )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                    .stroke(markColor(i), lineWidth: 2.5)
+                            )
+                            .overlay(alignment: .bottom) {
+                                if m.listenOn && isKick(i, s) {
+                                    Circle().fill(Theme.down).frame(width: 5, height: 5).padding(.bottom, 3)
+                                }
+                            }
                             .scaleEffect(on ? 1.08 : 1)
                             .animation(.easeOut(duration: 0.08), value: on)
+                            .onTapGesture {
+                                if m.listenOn && m.kickTarget == .pattern { m.toggleKickStep(i) }
+                            }
                     }
                 }
                 .padding(4)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.card))
+            }
+        }
+    }
+
+    private func isKick(_ i: Int, _ s: Step) -> Bool {
+        switch m.kickTarget {
+        case .everyBeat: return s.word.map { Counting.numbers.contains($0) } ?? false
+        case .everyCount: return s.word != nil
+        case .pattern: return m.kickSteps.contains(i)
+        }
+    }
+
+    private func markColor(_ i: Int) -> Color {
+        guard m.listenOn, let mk = m.marks[i] else { return .clear }
+        switch mk {
+        case .miss: return .red
+        case .hit(let ms):
+            if abs(ms) <= m.toleranceMs { return .green }
+            return abs(ms) <= m.toleranceMs * 2 ? .yellow : .red
+        }
+    }
+
+    // MARK: Kick feedback + listen settings
+
+    @ViewBuilder private var kickFeedback: some View {
+        if m.listenOn {
+            HStack(spacing: 8) {
+                fb("Last kick", m.lastHit.map(hitText) ?? "—",
+                   m.lastHit.map { abs($0) <= m.toleranceMs ? Color.green : .yellow } ?? Theme.dim)
+                if let r = m.repResults.last {
+                    fb("Last rep", r.clean ? "Clean ✓" : (r.misses > 0 ? "\(r.misses) missed" : "Off \(Int(r.meanAbs)) ms"),
+                       r.clean ? .green : .red)
+                } else {
+                    fb("Last rep", "—", Theme.dim)
+                }
+                fb("Clean reps", "\(m.cleanReps)/\(m.repResults.count)", Theme.beat)
+            }
+            if let r = m.repResults.last, r.hits > 0 {
+                Text(tendency(r)).font(.footnote).foregroundStyle(Theme.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private func hitText(_ ms: Double) -> String {
+        abs(ms) < 3 ? "On it" : "\(Int(abs(ms).rounded())) ms \(ms > 0 ? "late" : "early")"
+    }
+
+    private func tendency(_ r: RepResult) -> String {
+        let lean = abs(r.mean) < 5 ? "centered on the beat" : "\(Int(abs(r.mean))) ms \(r.mean > 0 ? "behind (dragging)" : "ahead (rushing)")"
+        return "Rep \(r.rep + 1): \(r.hits) kicks, \(lean), spread ±\(Int(r.spread)) ms."
+    }
+
+    private func fb(_ label: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(Theme.dim)
+            Text(value).font(.system(.headline, design: .rounded).weight(.heavy)).foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Theme.card))
+    }
+
+    private var listenCard: some View {
+        Card(title: "Kick check", icon: "mic.fill") {
+            Button {
+                if m.listenOn { m.listenOn = false; m.syncSnapshot() }
+                else { m.requestMic { ok in if ok { m.listenOn = true; m.syncSnapshot() } } }
+            } label: {
+                Label(m.listenOn ? "Listening for kicks" : "Listen for kicks",
+                      systemImage: m.listenOn ? "waveform.circle.fill" : "mic")
+                    .font(.system(.body, design: .rounded).weight(.bold))
+                    .foregroundStyle(m.listenOn ? .black : .white)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(Capsule().fill(m.listenOn ? Color.green : Color.white.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .disabled(m.isPlaying)
+
+            if m.micDenied {
+                Text("Microphone access is off. Turn it on in Settings → Privacy & Security → Microphone.")
+                    .font(.footnote).foregroundStyle(.red)
+            }
+
+            if m.listenOn {
+                Text("Kick should hit").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                HStack(spacing: 8) {
+                    ForEach(KickTarget.allCases) { t in
+                        Chip(text: t.rawValue, selected: m.kickTarget == t, tint: Theme.down) {
+                            m.kickTarget = t; m.syncSnapshot()
+                        }
+                    }
+                }
+                if m.kickTarget == .pattern {
+                    Text(m.kickSteps.isEmpty ? "Tap the tiles in the beat strip to mark where your kicks go."
+                                             : "\(m.kickSteps.count) kicks marked — tap tiles to change.")
+                        .font(.footnote).foregroundStyle(Theme.down)
+                }
+
+                Text("Clean if within").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                HStack(spacing: 8) {
+                    ForEach([10.0, 20, 30, 50], id: \.self) { t in
+                        Chip(text: "±\(Int(t)) ms", selected: m.toleranceMs == t, tint: Theme.sub) { m.toleranceMs = t }
+                    }
+                }
+
+                HStack {
+                    Text("Mic").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                    GeometryReader { g in
+                        Capsule().fill(Color.white.opacity(0.08))
+                            .overlay(alignment: .leading) {
+                                Capsule().fill(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))
+                                    .frame(width: g.size.width * CGFloat(m.isPlaying ? m.micLevel : 0))
+                            }
+                    }
+                    .frame(height: 8)
+                }
+                HStack {
+                    Text("Sensitivity").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                    Slider(value: $m.sensitivity, in: 0...1).tint(Theme.down)
+                }
+
+                HStack(spacing: 10) {
+                    Button { m.calibrate() } label: {
+                        Label(m.calibrating ? "Kick along… (12 hits)" : "Calibrate", systemImage: "scope")
+                            .font(.system(.subheadline, design: .rounded).weight(.bold))
+                            .frame(maxWidth: .infinity, minHeight: 42)
+                            .background(Capsule().fill(m.calibrating ? Theme.down.opacity(0.35) : Theme.card))
+                            .overlay(Capsule().stroke(Theme.stroke))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!m.isPlaying || m.calibrating)
+                    Text("Offset \(Int(m.calibrationMs)) ms").font(.footnote.monospacedDigit()).foregroundStyle(Theme.dim)
+                    Button("Reset") { m.calibrationMs = 0; UserDefaults.standard.set(0.0, forKey: "kickCalibrationMs") }
+                        .font(.footnote.weight(.bold)).tint(Theme.beat)
+                }
+                Text("Use headphones so the mic doesn't hear the click. To calibrate: press Start, tap Calibrate, then kick steadily along with the beat. Redo it if you switch headphones.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
             }
         }
     }
