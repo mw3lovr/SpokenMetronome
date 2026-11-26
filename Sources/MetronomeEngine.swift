@@ -201,9 +201,21 @@ final class MetronomeEngine: ObservableObject {
             try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothA2DP])
             try? session.setPreferredIOBufferDuration(0.005)
             try? session.setActive(true)
+            // Echo cancellation: remove the app's own click and voice from the mic,
+            // so only real kicks are heard (otherwise the speaker sound counts as hits).
+            engine.stop()
+            if !engine.inputNode.isVoiceProcessingEnabled {
+                try? engine.inputNode.setVoiceProcessingEnabled(true)
+            }
+            engine.inputNode.isVoiceProcessingAGCEnabled = false
+            engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
+                .init(enableAdvancedDucking: false, duckingLevel: .min)
             detector.install(on: engine)
         } else {
             detector.remove(from: engine)
+            if engine.inputNode.isVoiceProcessingEnabled {
+                engine.stop(); try? engine.inputNode.setVoiceProcessingEnabled(false)
+            }
             try? session.setCategory(.playback, mode: .default)
             try? session.setActive(true)
         }

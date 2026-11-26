@@ -97,7 +97,7 @@ final class KickDetector {
         let n = Int(buf.frameLength)
         let attack: Float = 0.5, release: Float = 0.9995, floorRate: Float = 0.9998
         let ratio = 6 - 4.5 * sensitivity          // 6x floor (low sens) … 1.5x (high)
-        let absMin = 0.02 - 0.018 * sensitivity
+        let absMin = 0.05 - 0.04 * sensitivity    // ignore quiet sounds
         var onsets: [Double] = []
         for i in 0..<n {
             let x = d[i]
