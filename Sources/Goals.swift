@@ -294,6 +294,7 @@ struct GoalsView: View {
         m.bpm = Double(g.currentBPM)
         m.loopOn = true
         m.reps = g.passReps
+        if !m.micDenied { m.listenOn = true }
         m.syncSnapshot()
     }
 

@@ -28,8 +28,13 @@ final class MetronomeEngine: ObservableObject {
     var onSessionEnd: ((_ bars: Int, _ finished: Bool) -> Void)?
 
     // Kick listening
-    @Published var listenOn = false
-    @Published var kickTarget: KickTarget = .everyBeat
+    /// Kick check is on by default and remembered.
+    @Published var listenOn = UserDefaults.standard.object(forKey: "listenOn") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(listenOn, forKey: "listenOn") }
+    }
+    @Published var kickTarget: KickTarget = KickTarget(rawValue: UserDefaults.standard.string(forKey: "kickTarget") ?? "") ?? .everyBeat {
+        didSet { UserDefaults.standard.set(kickTarget.rawValue, forKey: "kickTarget") }
+    }
     @Published var kickSteps: Set<Int> = []           // for .pattern
     @Published var toleranceMs: Double = 25 { didSet { pushDetector() } }
     @Published var sensitivity: Float = 0.5 { didSet { pushDetector() } }
@@ -119,6 +124,14 @@ final class MetronomeEngine: ObservableObject {
             UserDefaults.standard.set(ms, forKey: "kickCalibrationMs")
         }
         pushDetector()
+        // Turn kick check on automatically: ask for the mic once, switch off only if refused.
+        if listenOn {
+            switch AVAudioApplication.shared.recordPermission {
+            case .granted: break
+            case .denied: listenOn = false; micDenied = true
+            default: requestMic { [weak self] ok in if !ok { self?.listenOn = false } }
+            }
+        }
         reloadVoice()
     }
 
