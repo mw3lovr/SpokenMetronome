@@ -21,7 +21,7 @@ jobs:
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build -skipMacroValidation -skipPackagePluginValidation CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build 2>&1 | tee build.log; rc=${PIPESTATUS[0]}
           if [ $rc -ne 0 ]; then
-            grep -E "error:|fatal|xcodebuild: error|Could not resolve|failed" build.log | sort -u | head -40 | while read -r l; do echo "::error::$l"; done
+            grep -E -A8 "error:|Could not resolve" build.log | head -40 | while read -r l; do echo "::error::$l"; done
             tail -25 build.log | while read -r l; do echo "::warning::$l"; done
             exit $rc
           fi
