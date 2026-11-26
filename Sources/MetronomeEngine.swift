@@ -14,6 +14,15 @@ final class MetronomeEngine: ObservableObject {
     @Published var voiceOn = true
     @Published var clickOn = true
     @Published var voiceVolume: Float = 1.0
+    // Loop / reps
+    @Published var loopOn = false
+    @Published var reps = 10
+    @Published var barsPerRep = 1
+    @Published private(set) var barsDone = 0
+    var repsDone: Int { barsDone / max(barsPerRep, 1) }
+    /// Called when playback ends (finished loop or manual stop) with bars completed.
+    var onSessionEnd: ((_ bars: Int, _ finished: Bool) -> Void)?
+
     @Published private(set) var isPlaying = false
     @Published private(set) var isReady = false
     @Published private(set) var currentStep = -1
@@ -35,6 +44,9 @@ final class MetronomeEngine: ObservableObject {
     private var stepIndex = 0
     private var snap = Snapshot()
 
+    private var qBars = 0
+    private var startedBar = false
+    private var finishing = false
     private var wordBuffers: [String: AVAudioPCMBuffer] = [:]
 
     private struct Snapshot {
@@ -42,6 +54,7 @@ final class MetronomeEngine: ObservableObject {
         var bpm: Double = 100
         var voiceOn = true, clickOn = true
         var resetBar = false
+        var totalBars: Int? = nil
     }
 
     init() {
@@ -67,7 +80,8 @@ final class MetronomeEngine: ObservableObject {
         guard !isPlaying else { return }
         do { try engine.start() } catch { return }
         syncSnapshot()
-        queue.sync { nextSample = sr * 0.05; stepIndex = 0 }
+        queue.sync { nextSample = sr * 0.05; stepIndex = 0; qBars = 0; startedBar = false; finishing = false }
+        barsDone = 0
         let startAt = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05))
         clickNode.play(at: startAt)
         voiceNode.play(at: startAt)
@@ -79,8 +93,12 @@ final class MetronomeEngine: ObservableObject {
         isPlaying = true
     }
 
-    func stop() {
+    func stop() { end(finished: false) }
+
+    private func end(finished: Bool) {
+        guard isPlaying else { return }
         timer?.cancel(); timer = nil
+        onSessionEnd?(barsDone, finished)
         clickNode.stop(); voiceNode.stop()
         engine.pause()
         isPlaying = false
@@ -90,11 +108,13 @@ final class MetronomeEngine: ObservableObject {
     /// Push UI settings to the scheduler thread.
     func syncSnapshot() {
         let p = pattern, b = bpm, v = voiceOn, c = clickOn
+        let total: Int? = loopOn ? max(reps, 1) * max(barsPerRep, 1) : nil
         voiceNode.volume = voiceVolume
         queue.async { [weak self] in
             guard let self else { return }
             self.snap.pattern = p; self.snap.bpm = b
             self.snap.voiceOn = v; self.snap.clickOn = c
+            self.snap.totalBars = total
         }
     }
 
@@ -107,12 +127,28 @@ final class MetronomeEngine: ObservableObject {
     // MARK: - Scheduling (runs on `queue`)
 
     private func tick() {
+        if finishing { return }
         let now = currentSample()
         let horizon = now + sr * 0.15
         while nextSample < horizon {
             if snap.resetBar { stepIndex = 0; snap.resetBar = false }
             let steps = snap.pattern.steps
             if stepIndex >= steps.count { stepIndex = 0 }
+            if stepIndex == 0 {
+                if startedBar {
+                    qBars += 1
+                    let bars = qBars
+                    let d = max(0, (nextSample - now) / sr)
+                    let done = snap.totalBars.map { bars >= $0 } ?? false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + d) { [weak self] in
+                        guard let self, self.isPlaying else { return }
+                        self.barsDone = bars
+                        if done { self.end(finished: true) }
+                    }
+                    if done { finishing = true; return }
+                }
+                startedBar = true
+            }
             let step = steps[stepIndex]
             let stepSamples = sr * 60.0 / min(max(snap.bpm, 30), 280) * step.length
             let when = AVAudioTime(sampleTime: AVAudioFramePosition(nextSample), atRate: sr)

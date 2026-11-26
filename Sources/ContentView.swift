@@ -53,10 +53,53 @@ struct Chip: View {
     }
 }
 
-// MARK: - Main view
+// MARK: - Root with tabs
 
 struct ContentView: View {
     @StateObject private var m = MetronomeEngine()
+    @StateObject private var store = GoalStore()
+    @State private var startedAt = Date()
+
+    init() {
+        let a = UITabBarAppearance()
+        a.configureWithTransparentBackground()
+        a.backgroundColor = UIColor(red: 0.03, green: 0.03, blue: 0.07, alpha: 0.92)
+        UITabBar.appearance().standardAppearance = a
+        UITabBar.appearance().scrollEdgeAppearance = a
+    }
+
+    var body: some View {
+        TabView {
+            MetronomeView(m: m, store: store)
+                .tabItem { Label("Metronome", systemImage: "metronome.fill") }
+            GoalsView(store: store, m: m)
+                .tabItem { Label("Goals", systemImage: "target") }
+        }
+        .tint(Theme.beat)
+        .preferredColorScheme(.dark)
+        .onChange(of: m.isPlaying) { _, playing in if playing { startedAt = Date() } }
+        .onAppear {
+            m.onSessionEnd = { [weak m, weak store] bars, _ in
+                guard let m, let store else { return }
+                let per = max(m.loopOn ? m.barsPerRep : 1, 1)
+                let reps = bars / per
+                guard bars > 0 else { return }
+                store.log(PracticeSession(
+                    goalID: store.activeGoalID,
+                    bpm: Int(m.bpm),
+                    meter: m.useCustom ? "Custom" : m.signature.label,
+                    reps: reps, bars: bars,
+                    minutes: Date().timeIntervalSince(startedAt) / 60))
+            }
+        }
+    }
+}
+
+// MARK: - Metronome tab
+
+struct MetronomeView: View {
+    @ObservedObject var m: MetronomeEngine
+    @ObservedObject var store: GoalStore
     @State private var taps: [Date] = []
     @State private var editingBPM = false
     @State private var bpmText = ""
@@ -80,6 +123,8 @@ struct ContentView: View {
                     hero
                     beatStrip
                     tempoCard
+                    goalBanner
+                    loopCard
                     meterCard
                     soundCard
                     Color.clear.frame(height: 90)
@@ -95,6 +140,9 @@ struct ContentView: View {
         .onChange(of: m.voiceOn) { _, _ in m.syncSnapshot() }
         .onChange(of: m.clickOn) { _, _ in m.syncSnapshot() }
         .onChange(of: m.voiceVolume) { _, _ in m.syncSnapshot() }
+        .onChange(of: m.loopOn) { _, _ in m.syncSnapshot() }
+        .onChange(of: m.reps) { _, _ in m.syncSnapshot() }
+        .onChange(of: m.barsPerRep) { _, _ in m.syncSnapshot() }
         .alert("Enter BPM", isPresented: $editingBPM) {
             TextField("30–280", text: $bpmText).keyboardType(.numberPad)
             Button("Cancel", role: .cancel) {}
@@ -147,13 +195,87 @@ struct ContentView: View {
                     .contentTransition(.numericText())
                     .scaleEffect(m.isPlaying && current?.accent ?? 0 > 0 ? 1.08 : 1)
                     .shadow(color: color.opacity(0.6), radius: 18)
-                Text(current.map { "beat \($0.beat + 1)" } ?? "tap play")
+                Text(heroCaption)
                     .font(.subheadline.weight(.medium)).foregroundStyle(Theme.dim)
             }
             .animation(.spring(response: 0.18, dampingFraction: 0.55), value: m.currentStep)
         }
         .frame(width: 250, height: 250)
         .padding(.vertical, 6)
+    }
+
+    private var heroCaption: String {
+        guard m.isPlaying else { return m.loopOn ? "\(m.reps) reps ready" : "tap start" }
+        if m.loopOn {
+            let per = max(m.barsPerRep, 1)
+            let rep = min(m.barsDone / per + 1, m.reps)
+            return per > 1 ? "rep \(rep)/\(m.reps) · bar \(m.barsDone % per + 1)/\(per)" : "rep \(rep) of \(m.reps)"
+        }
+        return "bar \(m.barsDone + 1)"
+    }
+
+    // MARK: Goal + loop
+
+    @ViewBuilder private var goalBanner: some View {
+        if let g = store.activeGoal {
+            HStack(spacing: 12) {
+                Image(systemName: "target").font(.title3).foregroundStyle(Theme.down)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(g.name.isEmpty ? "Active goal" : g.name).font(.system(.subheadline, design: .rounded).weight(.bold))
+                    Text("Best \(store.bestBPM(g)) → \(g.targetBPM) BPM · today \(store.repsToday(g))/\(g.dailyReps) reps")
+                        .font(.caption).foregroundStyle(Theme.dim)
+                }
+                Spacer()
+                ProgressView(value: store.progress(g)).tint(Theme.down).frame(width: 60)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.down.opacity(0.35)))
+        }
+    }
+
+    private var loopCard: some View {
+        Card(title: "Loop", icon: "repeat") {
+            HStack(spacing: 10) {
+                Button { m.loopOn.toggle() } label: {
+                    Label(m.loopOn ? "Loop on" : "Loop off", systemImage: m.loopOn ? "repeat.circle.fill" : "repeat")
+                        .font(.system(.body, design: .rounded).weight(.bold))
+                        .foregroundStyle(m.loopOn ? .black : .white)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(Capsule().fill(m.loopOn ? Theme.down : Color.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .disabled(m.isPlaying)
+            }
+            if m.loopOn {
+                counter("Reps", value: $m.reps, range: 1...200, quick: [5, 10, 20, 50])
+                counter("Bars per rep", value: $m.barsPerRep, range: 1...16, quick: [1, 2, 4, 8])
+                Text("Plays \(m.reps * m.barsPerRep) bars, then stops and logs the session\(store.activeGoal == nil ? "" : " to your goal").")
+                    .font(.footnote).foregroundStyle(Theme.dim)
+            } else {
+                Text("Turn on to play a set number of reps, then stop automatically.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
+            }
+        }
+    }
+
+    private func counter(_ title: String, value: Binding<Int>, range: ClosedRange<Int>, quick: [Int]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                Spacer()
+                round("−") { value.wrappedValue = max(range.lowerBound, value.wrappedValue - 1) }
+                Text("\(value.wrappedValue)")
+                    .font(.system(.title2, design: .rounded).weight(.heavy)).monospacedDigit()
+                    .frame(minWidth: 48)
+                round("+") { value.wrappedValue = min(range.upperBound, value.wrappedValue + 1) }
+            }
+            HStack(spacing: 8) {
+                ForEach(quick, id: \.self) { q in
+                    Chip(text: "\(q)", selected: value.wrappedValue == q, tint: Theme.down) { value.wrappedValue = q }
+                }
+            }
+        }
     }
 
     private var progress: CGFloat {
