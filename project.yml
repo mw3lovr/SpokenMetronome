@@ -6,7 +6,7 @@ options:
 packages:
   MLXSwiftLM:
     url: https://github.com/ml-explore/mlx-swift-examples
-    exactVersion: 2.25.9
+    exactVersion: 2.29.1
 targets:
   SpokenMetronome:
     type: application
