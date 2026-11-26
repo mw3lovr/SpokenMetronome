@@ -593,12 +593,24 @@ struct MetronomeView: View {
                     Chip(text: noteName(sub), selected: m.subdivision == sub, tint: Theme.sub) { m.subdivision = sub }
                 }
             }
-            Text(hint).font(.footnote).foregroundStyle(Theme.dim)
+            Text(m.voiceOn ? hint : clickHint).font(.footnote).foregroundStyle(Theme.dim)
+            HStack(spacing: 8) {
+                Chip(text: "🗣 Speak counts", selected: m.voiceOn, tint: Theme.beat) { m.voiceOn = true; m.clickOn = true }
+                Chip(text: "Click only", selected: !m.voiceOn, tint: Theme.down) { m.voiceOn = false; m.clickOn = true }
+            }
         }
     }
 
     private func noteName(_ s: Subdivision) -> String {
         switch s { case .quarter: "♩ 4th"; case .eighth: "♫ 8th"; case .sixteenth: "♬ 16th" }
+    }
+
+    private var clickHint: String {
+        switch m.subdivision {
+        case .quarter: return "Clicks every beat — high click on 1."
+        case .eighth: return "Clicks every 8th — beats loud, “ands” soft."
+        case .sixteenth: return "Clicks every 16th — beats loud, “e and a” soft."
+        }
     }
 
     private var hint: String {
@@ -653,8 +665,15 @@ struct MetronomeView: View {
     private var soundCard: some View {
         Card(title: "Sound", icon: "speaker.wave.2.fill") {
             HStack(spacing: 8) {
-                Chip(text: "🗣 Voice", selected: m.voiceOn, tint: Theme.beat) { m.voiceOn.toggle() }
-                Chip(text: "Click", selected: m.clickOn, tint: Theme.down) { m.clickOn.toggle() }
+                Chip(text: "Voice + click", selected: m.voiceOn && m.clickOn, tint: Theme.beat) {
+                    m.voiceOn = true; m.clickOn = true
+                }
+                Chip(text: "Click only", selected: !m.voiceOn && m.clickOn, tint: Theme.down) {
+                    m.voiceOn = false; m.clickOn = true
+                }
+                Chip(text: "Voice only", selected: m.voiceOn && !m.clickOn, tint: Theme.sub) {
+                    m.voiceOn = true; m.clickOn = false
+                }
             }
             HStack {
                 Image(systemName: "speaker.fill").foregroundStyle(Theme.dim)

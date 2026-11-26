@@ -1,4 +1,5 @@
 import AVFoundation
+import AudioToolbox
 import SwiftUI
 
 /// Sample-accurate metronome: a background timer looks ~150 ms ahead and schedules
@@ -11,8 +12,8 @@ final class MetronomeEngine: ObservableObject {
     @Published var subdivision: Subdivision = .quarter { didSet { patternChanged() } }
     @Published var useCustom = false { didSet { patternChanged() } }
     @Published var customBeats: [Subdivision] = [.quarter, .eighth, .sixteenth, .quarter] { didSet { patternChanged() } }
-    @Published var voiceOn = true
-    @Published var clickOn = true
+    @Published var voiceOn = true { didSet { UserDefaults.standard.set(voiceOn, forKey: "voiceOn"); syncSnapshot() } }
+    @Published var clickOn = true { didSet { UserDefaults.standard.set(clickOn, forKey: "clickOn"); syncSnapshot() } }
     @Published var voiceVolume: Float = 1.0
     // Loop / reps
     @Published var loopOn = false
@@ -94,7 +95,11 @@ final class MetronomeEngine: ObservableObject {
         engine.attach(voiceNode)
         engine.connect(clickNode, to: engine.mainMixerNode, format: format)
         engine.connect(voiceNode, to: engine.mainMixerNode, format: format)
-        clicks = [makeClick(freq: 900, gain: 0.35), makeClick(freq: 1300, gain: 0.55), makeClick(freq: 1800, gain: 0.8)]
+        clicks = [makeClick(freq: 800, gain: 0.4), makeClick(freq: 1250, gain: 0.7), makeClick(freq: 1900, gain: 0.95)]
+        if UserDefaults.standard.object(forKey: "voiceOn") != nil {
+            voiceOn = UserDefaults.standard.bool(forKey: "voiceOn")
+            clickOn = UserDefaults.standard.bool(forKey: "clickOn")
+        }
         if let saved = UserDefaults.standard.object(forKey: "kickCalibrationMs") as? Double { calibrationMs = saved }
         detector.onMark = { [weak self] step, mark in
             guard let self, self.isPlaying else { return }
@@ -157,7 +162,7 @@ final class MetronomeEngine: ObservableObject {
     }
 
     private func say(_ n: Int) {
-        guard voiceOn else { return }
+        guard voiceOn else { AudioServicesPlaySystemSound(1104); return }
         let u = AVSpeechUtterance(string: "\(n)")
         u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
         u.voice = AVSpeechSynthesisVoice(language: "en-US")
