@@ -23,14 +23,14 @@ final class VoiceBank {
         let utt = AVSpeechUtterance(string: text)
         utt.rate = AVSpeechUtteranceMaximumSpeechRate * 0.62
         utt.pitchMultiplier = 1.05
-        utt.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utt.voice = AppVoice.current
 
         let chunks: [AVAudioPCMBuffer] = await withCheckedContinuation { cont in
             var collected: [AVAudioPCMBuffer] = []
             var finished = false
             synth.write(utt) { buffer in
                 guard !finished, let pcm = buffer as? AVAudioPCMBuffer else { return }
-                if pcm.frameLength == 0 {
+                if pcm.frameLength == 0 || pcm.audioBufferList.pointee.mBuffers.mDataByteSize == 0 {
                     finished = true
                     cont.resume(returning: collected)
                 } else {

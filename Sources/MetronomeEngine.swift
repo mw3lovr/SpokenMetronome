@@ -119,7 +119,13 @@ final class MetronomeEngine: ObservableObject {
             UserDefaults.standard.set(ms, forKey: "kickCalibrationMs")
         }
         pushDetector()
-        let bank = voices
+        reloadVoice()
+    }
+
+    /// Re-record the spoken counts with the chosen voice.
+    func reloadVoice() {
+        isReady = false
+        let bank = VoiceBank(format: format)
         Task { [weak self] in
             await bank.load(Counting.allWords)
             let loaded = bank.buffers
@@ -170,7 +176,7 @@ final class MetronomeEngine: ObservableObject {
         guard voiceOn else { AudioServicesPlaySystemSound(1104); return }
         let u = AVSpeechUtterance(string: "\(n)")
         u.rate = AVSpeechUtteranceDefaultSpeechRate * 1.1
-        u.voice = AVSpeechSynthesisVoice(language: "en-US")
+        u.voice = AppVoice.current
         countdownVoice.stopSpeaking(at: .immediate)
         countdownVoice.speak(u)
     }

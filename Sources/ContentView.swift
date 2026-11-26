@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 // MARK: - Theme
 
@@ -117,6 +118,8 @@ struct MetronomeView: View {
     @ObservedObject var coach: Coach
     @State private var taps: [Date] = []
     @State private var editingBPM = false
+    @State private var voiceID = UserDefaults.standard.string(forKey: AppVoice.key) ?? AppVoice.current?.identifier ?? ""
+    @State private var previewer = AVSpeechSynthesizer()
     @State private var bpmText = ""
 
     private var current: Step? {
@@ -703,7 +706,55 @@ struct MetronomeView: View {
             }
             .disabled(!m.voiceOn)
             .opacity(m.voiceOn ? 1 : 0.4)
+            voicePicker
         }
+    }
+
+    private var voicePicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Voice").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
+                Spacer()
+                Menu {
+                    ForEach(AppVoice.english, id: \.identifier) { v in
+                        Button {
+                            voiceID = v.identifier
+                            UserDefaults.standard.set(v.identifier, forKey: AppVoice.key)
+                            preview(v)
+                            if !m.isPlaying { m.reloadVoice() }
+                        } label: {
+                            if v.identifier == voiceID { Label(AppVoice.label(v), systemImage: "checkmark") }
+                            else { Text(AppVoice.label(v)) }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(AppVoice.english.first { $0.identifier == voiceID }.map(AppVoice.label) ?? "Default")
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                    }
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                    .padding(.horizontal, 12).frame(minHeight: 40)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                }
+                .disabled(m.isPlaying)
+                Button { if let v = AppVoice.current { preview(v) } } label: {
+                    Image(systemName: "play.circle.fill").font(.title2).foregroundStyle(Theme.beat)
+                }
+                .buttonStyle(.plain)
+            }
+            if !AppVoice.english.contains(where: { $0.quality != .default }) {
+                Text("For a natural voice, download one marked Enhanced or Premium in Settings → Accessibility → Spoken Content → Voices → English, then reopen the app.")
+                    .font(.footnote).foregroundStyle(Theme.dim)
+            }
+        }
+    }
+
+    private func preview(_ v: AVSpeechSynthesisVoice) {
+        let u = AVSpeechUtterance(string: "One, two, three, four. Nice and steady.")
+        u.voice = v
+        previewer.stopSpeaking(at: .immediate)
+        previewer.speak(u)
     }
 
     // MARK: Coach

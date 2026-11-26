@@ -93,7 +93,7 @@ final class Coach: ObservableObject {
         lastMessage = text
         voice.stopSpeaking(at: .immediate)
         let u = AVSpeechUtterance(string: text)
-        u.voice = AVSpeechSynthesisVoice(language: "en-US")
+        u.voice = AppVoice.current
         voice.speak(u)
     }
 
