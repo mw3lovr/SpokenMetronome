@@ -117,7 +117,10 @@ final class MetronomeEngine: ObservableObject {
             if case .hit(let ms) = mark { self.lastHit = ms }
         }
         detector.onRep = { [weak self] r in self?.repResults.append(r) }
-        detector.onLevel = { [weak self] lv in self?.micLevel = lv }
+        detector.onLevel = { [weak self] lv in
+            guard let self, abs(self.micLevel - lv) > 0.03 else { return }
+            self.micLevel = (lv * 20).rounded() / 20
+        }
         detector.onCalibrated = { [weak self] ms in
             self?.calibrating = false
             self?.calibrationMs = ms

@@ -216,7 +216,6 @@ struct MetronomeView: View {
                     .foregroundStyle(color)
                     .contentTransition(.numericText())
                     .scaleEffect(m.isPlaying && current?.accent ?? 0 > 0 ? 1.08 : 1)
-                    .shadow(color: color.opacity(0.6), radius: 18)
                 Text(heroCaption)
                     .font(.subheadline.weight(.medium)).foregroundStyle(Theme.dim)
             }
@@ -337,7 +336,6 @@ struct MetronomeView: View {
                             .background(
                                 RoundedRectangle(cornerRadius: 9, style: .continuous)
                                     .fill(on ? Theme.color(s.accent) : Color.white.opacity(s.accent > 0 ? 0.10 : 0.05))
-                                    .shadow(color: on ? Theme.color(s.accent).opacity(0.8) : .clear, radius: 8)
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 9, style: .continuous)
@@ -349,7 +347,7 @@ struct MetronomeView: View {
                                 }
                             }
                             .scaleEffect(on ? 1.08 : 1)
-                            .animation(.easeOut(duration: 0.08), value: on)
+                            .animation(.linear(duration: 0.05), value: on)
                             .onTapGesture {
                                 if m.listenOn && m.kickTarget == .pattern { m.toggleKickStep(i) }
                             }

@@ -114,7 +114,7 @@ final class KickDetector {
             }
         }
         levelCount += n
-        if levelCount > Int(sr / 20) {
+        if levelCount > Int(sr / 8) {   // ~8 updates a second is plenty for a meter
             let lv = min(levelAcc * 4, 1); levelAcc = 0; levelCount = 0
             DispatchQueue.main.async { [weak self] in self?.onLevel?(lv) }
         }
