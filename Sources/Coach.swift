@@ -74,17 +74,35 @@ final class Coach: ObservableObject {
                     mention at most one number. First say naturally whether they passed the step, \
                     then give honest constructive criticism: name the one biggest problem and one specific way \
                     to practice it (for example slowing down 10 BPM, counting out loud, relaxing the ankle). \
-                    Don't only praise, even on a good run. Early kicks mean rushing, late kicks mean dragging.
+                    Don't only praise, even on a good run. Early kicks mean rushing, late kicks mean dragging. \
+                    Never claim you changed anything. Never use headings or labels. \
+                    Example reply: "Not quite, eight of ten clean. You're rushing a little, so relax your ankle and let the click come to you."
                     """,
-                    generateParameters: GenerateParameters(maxTokens: 60, temperature: 0.8))
+                    generateParameters: GenerateParameters(maxTokens: 50, temperature: 0.5))
                 let reply = try await session.respond(to: facts(s))
-                let clean = reply.replacingOccurrences(of: "*", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                say(clean.isEmpty ? rule : clean)
+                say(Self.tidy(reply) ?? rule)
             } catch {
                 say(rule)
             }
         }
+    }
+
+    /// Keep the model to two short spoken sentences; nil means fall back to the built-in coach.
+    static func tidy(_ raw: String) -> String? {
+        var t = raw.replacingOccurrences(of: "*", with: "").replacingOccurrences(of: "#", with: "")
+            .replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = t.lowercased()
+        let bad = ["adjust", "i've made", "i have made", "should not be changed", "feedback on", "here is", "here's your",
+                   "tempo:", "consistency:", "summary", "report"]
+        if t.isEmpty || bad.contains(where: lower.contains) || t.contains(":") { return nil }
+        var sentences: [String] = []
+        t.enumerateSubstrings(in: t.startIndex..., options: .bySentences) { sub, _, _, stop in
+            if let sub { sentences.append(sub.trimmingCharacters(in: .whitespaces)) }
+            if sentences.count == 2 { stop = true }
+        }
+        t = sentences.joined(separator: " ")
+        if t.split(separator: " ").count > 45 || t.count < 10 { return nil }
+        return t
     }
 
     func test() {
