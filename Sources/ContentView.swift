@@ -441,10 +441,19 @@ struct MetronomeView: View {
                 }
 
                 Text("Clean if within").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
-                HStack(spacing: 8) {
-                    ForEach([10.0, 20, 30, 50], id: \.self) { t in
-                        Chip(text: "±\(Int(t)) ms", selected: m.toleranceMs == t, tint: Theme.sub) { m.toleranceMs = t }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach([10.0, 20, 30, 50, 75, 100, 150, 200], id: \.self) { t in
+                            Chip(text: "±\(Int(t)) ms", selected: m.toleranceMs == t, tint: Theme.sub) { m.toleranceMs = t }
+                        }
                     }
+                }
+                HStack {
+                    round("−") { m.toleranceMs = max(5, m.toleranceMs - 5) }
+                    Slider(value: $m.toleranceMs, in: 5...250, step: 5).tint(Theme.sub)
+                    round("+") { m.toleranceMs = min(250, m.toleranceMs + 5) }
+                    Text("±\(Int(m.toleranceMs)) ms").font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .monospacedDigit().frame(minWidth: 70, alignment: .trailing)
                 }
 
                 HStack {

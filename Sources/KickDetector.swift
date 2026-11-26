@@ -132,7 +132,7 @@ final class KickDetector {
     func startCalibration() { calibrating = true; calErrors.removeAll() }
 
     func expect(time: Double, step: Int, rep: Int, stepSeconds: Double) {
-        let window = min(0.15, max(0.03, stepSeconds * 0.45))
+        let window = min(stepSeconds * 0.48, max(0.15, toleranceMs * 1.5 / 1000))
         targets.append(Target(time: time, step: step, rep: rep, window: window, result: nil))
         openReps.insert(rep)
         if repBuckets[rep] == nil { repBuckets[rep] = ([], 0) }
