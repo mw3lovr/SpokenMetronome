@@ -68,11 +68,13 @@ final class Coach: ObservableObject {
                 let session = ChatSession(
                     c,
                     instructions: """
-                    You are an encouraging but honest drum coach. Reply with at most two short spoken sentences, \
-                    no lists, no emojis, no markdown. Always say first whether the step was passed. \
-                    Give one concrete tip from the numbers. Rushing means kicks are early; dragging means late.
+                    You are a friendly drum teacher talking to your student right after they played. \
+                    Talk like a real person out loud: casual, warm, short, contractions, no lists, no emojis, \
+                    no markdown, no headings. Two sentences max. Don't read the numbers back like a report; \
+                    mention at most one number. First say naturally whether they passed the step, \
+                    then give one simple feel-based tip. Early kicks mean rushing, late kicks mean dragging.
                     """,
-                    generateParameters: GenerateParameters(maxTokens: 70, temperature: 0.5))
+                    generateParameters: GenerateParameters(maxTokens: 60, temperature: 0.8))
                 let reply = try await session.respond(to: facts(s))
                 let clean = reply.replacingOccurrences(of: "*", with: "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -94,6 +96,9 @@ final class Coach: ObservableObject {
         voice.stopSpeaking(at: .immediate)
         let u = AVSpeechUtterance(string: text)
         u.voice = AppVoice.current
+        u.rate = AVSpeechUtteranceDefaultSpeechRate * 0.95
+        u.pitchMultiplier = 1.0
+        u.preUtteranceDelay = 0.2
         voice.speak(u)
     }
 
@@ -118,32 +123,49 @@ final class Coach: ObservableObject {
     }
 
     private func ruleVerdict(_ s: SessionSummary) -> String {
+        func pick(_ o: [String]) -> String { o.randomElement()! }
         var parts: [String] = []
+        let clean = s.cleanReps ?? s.reps
+        let pct = s.reps > 0 ? Double(clean) / Double(s.reps) : 0
+
         if let o = s.outcome {
             if o.wrongTempo {
-                parts.append("That was not at your step tempo of \(o.stepBPM), so it didn't count.")
+                parts.append(pick(["Hang on, that wasn't at \(o.stepBPM), so it won't count toward your step.",
+                                   "Heads up, your step is at \(o.stepBPM). Set it back there and go again."]))
             } else if o.goalComplete {
-                parts.append("Step passed. You finished the whole goal. Great work!")
+                parts.append(pick(["That's it, you just finished the whole goal. Seriously, nice work.",
+                                   "Goal done! You climbed the whole ladder. Be proud of that one."]))
             } else if o.passed {
-                parts.append("Step passed! \(o.got) clean reps. Next up, \(o.nextBPM ?? o.stepBPM) BPM.")
+                parts.append(pick(["Nice, that's a pass! Let's bump it up to \(o.nextBPM ?? o.stepBPM).",
+                                   "You got it. Step passed, so next time we're going to \(o.nextBPM ?? o.stepBPM).",
+                                   "That was solid. You earned the next step, \(o.nextBPM ?? o.stepBPM)."]))
+            } else if o.got >= o.needed - 2 {
+                parts.append(pick(["So close. \(o.got) out of \(o.needed). One more round and you've got it.",
+                                   "Almost there, just a couple short. Run it again at \(o.stepBPM)."]))
             } else {
-                parts.append("Not yet. \(o.got) of \(o.needed) clean reps. Stay at \(o.stepBPM).")
+                parts.append(pick(["Not quite yet. \(o.got) out of \(o.needed) clean. Let's stay at \(o.stepBPM) a bit longer.",
+                                   "That one was a little rough, and that's fine. We'll keep working \(o.stepBPM)."]))
             }
-        } else if let c = s.cleanReps {
-            let pct = s.reps > 0 ? Double(c) / Double(s.reps) : 0
-            parts.append(pct >= 0.9 ? "Excellent. \(c) of \(s.reps) clean." :
-                         pct >= 0.6 ? "Good. \(c) of \(s.reps) clean." :
-                                      "Rough one. Only \(c) of \(s.reps) clean.")
+        } else if s.cleanReps != nil {
+            parts.append(pct >= 0.9 ? pick(["That felt really locked in.", "Really clean, nice job."]) :
+                         pct >= 0.6 ? pick(["Pretty good overall.", "Decent run, getting there."]) :
+                                      pick(["That one got away from you a bit.", "Tough set, let's reset and try again."]))
         } else {
-            parts.append("\(s.reps) reps at \(s.bpm).")
+            parts.append(pick(["Nice work, that's \(s.reps) reps at \(s.bpm).", "Good set."]))
         }
+
         if let m = s.meanSignedMs, abs(m) >= 8 {
-            parts.append(m > 0 ? "You're dragging about \(Int(m)) milliseconds. Push a little."
-                               : "You're rushing about \(Int(-m)) milliseconds. Relax and sit back.")
-        } else if s.meanSignedMs != nil {
-            parts.append("Your timing is centered.")
+            parts.append(m > 0
+                ? pick(["You're sitting a little behind the beat, so lean forward just a touch.",
+                        "You're dragging slightly. Think about landing right on top of the click."])
+                : pick(["You're rushing a bit. Relax and let the beat come to you.",
+                        "You're a little ahead of the click. Breathe and sit back into it."]))
+        } else if s.meanSignedMs != nil, pct >= 0.6 {
+            parts.append(pick(["Your timing's right in the pocket.", "Your feel is nice and centered."]))
         }
-        if let sp = s.spreadMs, sp > 20 { parts.append("Work on keeping each kick the same.") }
+        if let sp = s.spreadMs, sp > 20 {
+            parts.append(pick(["Try to make every kick feel the same.", "Work on keeping each hit even."]))
+        }
         return parts.joined(separator: " ")
     }
 }
