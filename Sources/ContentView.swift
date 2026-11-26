@@ -394,6 +394,10 @@ struct MetronomeView: View {
                 }
                 fb("Clean reps", "\(m.cleanReps)/\(m.repResults.count)", Theme.beat)
             }
+            if let cue = m.live.tempoCue {
+                Text("Tempo: \(cue)").font(.footnote.weight(.bold)).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let r = m.repResults.last, r.hits > 0 {
                 Text(tendency(r)).font(.footnote).foregroundStyle(Theme.dim)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -475,7 +479,7 @@ struct MetronomeView: View {
 
                 HStack {
                     Text("Mic").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.dim)
-                    LiveView(live: m.live) { GeometryReader { g in
+                    LiveView(live: m.meter) { GeometryReader { g in
                         Capsule().fill(Color.white.opacity(0.08))
                             .overlay(alignment: .leading) {
                                 Capsule().fill(LinearGradient(colors: [.green, .yellow, .red], startPoint: .leading, endPoint: .trailing))

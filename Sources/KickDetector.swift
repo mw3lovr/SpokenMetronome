@@ -45,6 +45,11 @@ final class KickDetector {
     var onRep: ((RepResult) -> Void)?
     var onLevel: ((Float) -> Void)?
     var onCalibrated: ((Double) -> Void)?
+    /// Live "faster"/"slower" call, delivered on the scheduler queue.
+    var onTempoCue: ((TempoCue) -> Void)?
+    var tempoCueOn = true
+
+    enum TempoCue { case faster, slower }
 
     private let queue: DispatchQueue
     private var targets: [Target] = []
@@ -52,6 +57,10 @@ final class KickDetector {
     private var openReps = Set<Int>()
     private var calibrating = false
     private var calErrors: [Double] = []
+    // Tempo tracking: recent kick times vs. recent expected times
+    private var onsetHistory: [Double] = []
+    private var targetHistory: [Double] = []
+    private var kicksSinceCue = 0
 
     // DSP state (audio thread)
     private var b0: Float = 0, b1: Float = 0, b2: Float = 0, a1: Float = 0, a2: Float = 0
@@ -126,6 +135,7 @@ final class KickDetector {
 
     func reset() {
         targets.removeAll(); repBuckets.removeAll(); openReps.removeAll()
+        onsetHistory.removeAll(); targetHistory.removeAll(); kicksSinceCue = 0
         env = 0; floorLevel = 0.001
     }
 
@@ -135,11 +145,14 @@ final class KickDetector {
         let window = min(stepSeconds * 0.48, max(0.15, toleranceMs * 1.5 / 1000))
         targets.append(Target(time: time, step: step, rep: rep, window: window, result: nil))
         openReps.insert(rep)
+        targetHistory.append(time); if targetHistory.count > 9 { targetHistory.removeFirst() }
         if repBuckets[rep] == nil { repBuckets[rep] = ([], 0) }
     }
 
     private func hit(at raw: Double) {
         let t = raw - calibrationMs / 1000
+        onsetHistory.append(t); if onsetHistory.count > 9 { onsetHistory.removeFirst() }
+        checkTempo()
         var best: Int?, bestErr = Double.infinity
         for (i, tg) in targets.enumerated() where tg.result == nil {
             let e = t - tg.time
@@ -160,6 +173,30 @@ final class KickDetector {
         repBuckets[targets[i].rep]?.errors.append(ms)
         let step = targets[i].step
         DispatchQueue.main.async { [weak self] in self?.onMark?(step, .hit(ms)) }
+    }
+
+    /// Compares the spacing between your kicks with the spacing the click expects.
+    /// Works even when you drift so far off that kicks no longer line up with clicks.
+    private func checkTempo() {
+        kicksSinceCue += 1
+        guard tempoCueOn, !calibrating, kicksSinceCue >= 4,
+              onsetHistory.count >= 5, targetHistory.count >= 3 else { return }
+        func median(_ a: [Double]) -> Double { let s = a.sorted(); return s[s.count / 2] }
+        let gaps = zip(targetHistory.dropFirst(), targetHistory).map { $0 - $1 }
+        let expected = median(gaps)
+        // Only for evenly spaced kicks (every beat / every count); uneven patterns are skipped.
+        guard expected > 0.08, gaps.allSatisfy({ abs($0 - expected) < expected * 0.1 }) else { return }
+        // Ignore gaps from a missed kick or a double hit.
+        let iois = zip(onsetHistory.dropFirst(), onsetHistory).map { $0 - $1 }
+            .filter { $0 > expected * 0.6 && $0 < expected * 1.5 }
+        guard iois.count >= 4 else { return }
+        let played = median(Array(iois.suffix(5)))
+        let limit = max(expected * 0.035, 0.010)   // ~3.5% off tempo, at least 10 ms per kick
+        guard abs(played - expected) > limit else { return }
+        let cue: TempoCue = played < expected ? .slower : .faster
+        kicksSinceCue = 0
+        onsetHistory = Array(onsetHistory.suffix(1))   // judge the next stretch fresh
+        onTempoCue?(cue)
     }
 
     /// Mark overdue targets as misses and close finished reps. `currentRep` = rep being scheduled.

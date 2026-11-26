@@ -66,7 +66,12 @@ final class MetronomeEngine: ObservableObject {
     var currentStep: Int { live.currentStep }
     var marks: [Int: HitMark] { live.marks }
     var lastHit: Double? { live.lastHit }
-    var micLevel: Float { live.micLevel }
+    /// Mic meter updates ~8x a second; kept separate so it only redraws the meter.
+    let meter = MeterState()
+    var micLevel: Float { meter.micLevel }
+    @Published var tempoCueOn = UserDefaults.standard.object(forKey: "tempoCueOn") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(tempoCueOn, forKey: "tempoCueOn"); pushDetector() }
+    }
     @Published private(set) var pattern = Counting.pattern(TimeSignature.all[0], .quarter)
 
     private let engine = AVAudioEngine()
@@ -89,6 +94,10 @@ final class MetronomeEngine: ObservableObject {
     private var startedBar = false
     private var finishing = false
     private var wordBuffers: [String: AVAudioPCMBuffer] = [:]
+    private var trimCache: [String: AVAudioPCMBuffer] = [:]
+    private var pendingCue: KickDetector.TempoCue?
+    private var cueMuteUntil: Double = 0
+    static let cueWords = ["slower", "faster"]
 
     private struct Snapshot {
         var pattern = Counting.pattern(TimeSignature.all[0], .quarter)
@@ -122,13 +131,16 @@ final class MetronomeEngine: ObservableObject {
         }
         detector.onRep = { [weak self] r in self?.repResults.append(r) }
         detector.onLevel = { [weak self] lv in
-            guard let self, abs(self.live.micLevel - lv) > 0.03 else { return }
-            self.live.micLevel = (lv * 20).rounded() / 20
+            guard let self, abs(self.meter.micLevel - lv) > 0.05 else { return }
+            self.meter.micLevel = (lv * 20).rounded() / 20
         }
         detector.onCalibrated = { [weak self] ms in
             self?.calibrating = false
             self?.calibrationMs = ms
             UserDefaults.standard.set(ms, forKey: "kickCalibrationMs")
+        }
+        detector.onTempoCue = { [weak self] cue in      // runs on `queue`
+            self?.pendingCue = cue
         }
         pushDetector()
         // Turn kick check on automatically: ask for the mic once, switch off only if refused.
@@ -195,9 +207,9 @@ final class MetronomeEngine: ObservableObject {
         isReady = false
         let bank = VoiceBank(format: format)
         Task { [weak self] in
-            await bank.load(Counting.allWords)
+            await bank.load(Counting.allWords + Self.cueWords)
             let loaded = bank.buffers
-            self?.queue.async { self?.wordBuffers = loaded }
+            self?.queue.async { self?.wordBuffers = loaded; self?.trimCache = [:] }
             await MainActor.run { self?.isReady = true }
         }
     }
@@ -277,11 +289,12 @@ final class MetronomeEngine: ObservableObject {
             try? session.setActive(true)
         }
         outLatency = session.outputLatency + session.ioBufferDuration
-        live.marks = [:]; live.lastHit = nil; repResults = []
+        live.marks = [:]; live.lastHit = nil; live.tempoCue = nil; repResults = []
         queue.sync { detector.reset() }
         do { try engine.start() } catch { return }
         syncSnapshot()
-        queue.sync { nextSample = sr * 0.05; stepIndex = 0; qBars = 0; startedBar = false; finishing = false }
+        queue.sync { nextSample = sr * 0.05; stepIndex = 0; qBars = 0; startedBar = false; finishing = false
+                     pendingCue = nil; cueMuteUntil = 0 }
         barsDone = 0
         let startAt = AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: 0.05))
         hostStart = AVAudioTime.seconds(forHostTime: startAt.hostTime)
@@ -354,8 +367,9 @@ final class MetronomeEngine: ObservableObject {
     }
 
     private func pushDetector() {
-        let t = toleranceMs, s = sensitivity, c = calibrationMs
+        let t = toleranceMs, s = sensitivity, c = calibrationMs, tc = tempoCueOn
         queue.async { [weak self] in
+            self?.detector.tempoCueOn = tc
             self?.detector.toleranceMs = t; self?.detector.sensitivity = s; self?.detector.calibrationMs = c
         }
     }
@@ -407,7 +421,21 @@ final class MetronomeEngine: ObservableObject {
             if snap.clickOn {
                 clickNode.scheduleBuffer(clicks[step.accent], at: when, options: [], completionHandler: nil)
             }
-            if snap.voiceOn, let w = step.word, let buf = trimmed(w, maxFrames: Int(stepSamples * 0.92)) {
+            let beatSamples = sr * 60.0 / min(max(snap.bpm, 30), 280)
+            if let cue = pendingCue, snap.listen, let w = step.word, Counting.numbers.contains(w) {
+                // Say "slower"/"faster" in place of this count, pre-rendered so it lands on time.
+                let word = cue == .slower ? "slower" : "faster"
+                if let buf = trimmed(word, maxFrames: Int(beatSamples * 0.95)) {
+                    voiceNode.scheduleBuffer(buf, at: when, options: [], completionHandler: nil)
+                }
+                pendingCue = nil
+                cueMuteUntil = nextSample + beatSamples * 0.95
+                DispatchQueue.main.asyncAfter(deadline: .now() + max(0, (nextSample - now) / sr)) { [weak self] in
+                    guard let self, self.isPlaying else { return }
+                    self.live.tempoCue = cue == .slower ? "Slow down" : "Speed up"
+                }
+            } else if snap.voiceOn, nextSample >= cueMuteUntil, let w = step.word,
+                      let buf = trimmed(w, maxFrames: Int(stepSamples * 0.92)) {
                 voiceNode.scheduleBuffer(buf, at: when, options: [], completionHandler: nil)
             }
 
@@ -440,6 +468,8 @@ final class MetronomeEngine: ObservableObject {
         guard let src = wordBuffers[word] else { return nil }
         let len = min(Int(src.frameLength), max(maxFrames, 1))
         if len == Int(src.frameLength) { return src }
+        let key = "\(word)#\(len)"
+        if let hit = trimCache[key] { return hit }   // don't rebuild the same cut every count
         guard let out = AVAudioPCMBuffer(pcmFormat: src.format, frameCapacity: AVAudioFrameCount(len)) else { return nil }
         let s = src.floatChannelData![0], o = out.floatChannelData![0]
         let fade = min(256, len)
@@ -448,6 +478,8 @@ final class MetronomeEngine: ObservableObject {
             o[i] = s[i] * g
         }
         out.frameLength = AVAudioFrameCount(len)
+        if trimCache.count > 64 { trimCache.removeAll() }
+        trimCache[key] = out
         return out
     }
 
@@ -469,12 +501,16 @@ final class LiveState: ObservableObject {
     @Published var currentStep = -1
     @Published var marks: [Int: HitMark] = [:]
     @Published var lastHit: Double?
+    @Published var tempoCue: String?
+}
+
+final class MeterState: ObservableObject {
     @Published var micLevel: Float = 0
 }
 
-/// Re-draws only its content when the live playback state changes.
-struct LiveView<Content: View>: View {
-    @ObservedObject var live: LiveState
+/// Re-draws only its content when the given live state changes.
+struct LiveView<Live: ObservableObject, Content: View>: View {
+    @ObservedObject var live: Live
     @ViewBuilder let content: () -> Content
     var body: some View { content() }
 }
