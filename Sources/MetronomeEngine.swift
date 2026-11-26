@@ -7,7 +7,10 @@ import SwiftUI
 final class MetronomeEngine: ObservableObject {
     @Published var bpm: Double = 100
 
-    func nudge(_ delta: Double) { bpm = min(max(bpm + delta, 30), 280) }
+    /// Set by an active locked goal step; tempo controls can't move it.
+    @Published var lockedBPM: Double? { didSet { if let l = lockedBPM { bpm = l; syncSnapshot() } } }
+
+    func nudge(_ delta: Double) { guard lockedBPM == nil else { return }; bpm = min(max(bpm + delta, 30), 280) }
     @Published var signature = TimeSignature.all[0] { didSet { patternChanged() } }
     @Published var subdivision: Subdivision = .quarter { didSet { patternChanged() } }
     @Published var useCustom = false { didSet { patternChanged() } }
@@ -44,6 +47,8 @@ final class MetronomeEngine: ObservableObject {
     var cleanReps: Int { repResults.filter(\.clean).count }
     private var allErrors: [Double] { repResults.flatMap(\.errors) }
     var sessionMeanAbs: Double? { allErrors.isEmpty ? nil : allErrors.map(abs).reduce(0, +) / Double(allErrors.count) }
+    var sessionMeanSigned: Double? { allErrors.isEmpty ? nil : allErrors.reduce(0, +) / Double(allErrors.count) }
+    var sessionMisses: Int { repResults.reduce(0) { $0 + $1.misses } }
     var sessionSpread: Double? {
         let e = allErrors; guard e.count > 1 else { return nil }
         let mean = e.reduce(0, +) / Double(e.count)

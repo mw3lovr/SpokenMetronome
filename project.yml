@@ -3,11 +3,20 @@ options:
   bundleIdPrefix: com.spokenmetronome
   deploymentTarget:
     iOS: "17.0"
+packages:
+  MLXSwiftLM:
+    url: https://github.com/ml-explore/mlx-swift-lm
+    exactVersion: 2.29.1
 targets:
   SpokenMetronome:
     type: application
     platform: iOS
     sources: [Sources]
+    dependencies:
+      - package: MLXSwiftLM
+        product: MLXLLM
+      - package: MLXSwiftLM
+        product: MLXLMCommon
     info:
       path: Sources/Info.plist
       properties:

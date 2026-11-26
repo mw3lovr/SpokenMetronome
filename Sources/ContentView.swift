@@ -58,6 +58,7 @@ struct Chip: View {
 struct ContentView: View {
     @StateObject private var m = MetronomeEngine()
     @StateObject private var store = GoalStore()
+    @StateObject private var coach = Coach()
     @State private var startedAt = Date()
 
     init() {
@@ -70,7 +71,7 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            MetronomeView(m: m, store: store)
+            MetronomeView(m: m, store: store, coach: coach)
                 .tabItem { Label("Metronome", systemImage: "metronome.fill") }
             GoalsView(store: store, m: m)
                 .tabItem { Label("Goals", systemImage: "target") }
@@ -78,13 +79,15 @@ struct ContentView: View {
         .tint(Theme.beat)
         .preferredColorScheme(.dark)
         .onChange(of: m.isPlaying) { _, playing in if playing { startedAt = Date() } }
+        .onChange(of: store.lockedBPM) { _, v in m.lockedBPM = v.map(Double.init) }
         .onAppear {
+            m.lockedBPM = store.lockedBPM.map(Double.init)
             m.onSessionEnd = { [weak m, weak store] bars, _ in
                 guard let m, let store else { return }
                 let per = max(m.loopOn ? m.barsPerRep : 1, 1)
                 let reps = bars / per
                 guard bars > 0 else { return }
-                store.log(PracticeSession(
+                let session = PracticeSession(
                     goalID: store.activeGoalID,
                     bpm: Int(m.bpm),
                     meter: m.useCustom ? "Custom" : m.signature.label,
@@ -92,7 +95,15 @@ struct ContentView: View {
                     minutes: Date().timeIntervalSince(startedAt) / 60,
                     cleanReps: m.listenOn ? m.cleanReps : nil,
                     avgErrorMs: m.listenOn ? m.sessionMeanAbs : nil,
-                    spreadMs: m.listenOn ? m.sessionSpread : nil))
+                    spreadMs: m.listenOn ? m.sessionSpread : nil)
+                let outcome = store.evaluate(session)
+                store.log(session)
+                m.lockedBPM = store.lockedBPM.map(Double.init)
+                coach.speakVerdict(SessionSummary(
+                    bpm: session.bpm, reps: session.reps, cleanReps: session.cleanReps,
+                    meanSignedMs: m.listenOn ? m.sessionMeanSigned : nil,
+                    spreadMs: session.spreadMs, missed: m.listenOn ? m.sessionMisses : 0,
+                    outcome: outcome))
             }
         }
     }
@@ -103,6 +114,7 @@ struct ContentView: View {
 struct MetronomeView: View {
     @ObservedObject var m: MetronomeEngine
     @ObservedObject var store: GoalStore
+    @ObservedObject var coach: Coach
     @State private var taps: [Date] = []
     @State private var editingBPM = false
     @State private var bpmText = ""
@@ -132,6 +144,7 @@ struct MetronomeView: View {
                     listenCard
                     meterCard
                     soundCard
+                    coachCard
                     Color.clear.frame(height: 90)
                 }
                 .padding(.horizontal, 18)
@@ -229,7 +242,8 @@ struct MetronomeView: View {
                 Image(systemName: "target").font(.title3).foregroundStyle(Theme.down)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(g.name.isEmpty ? "Active goal" : g.name).font(.system(.subheadline, design: .rounded).weight(.bold))
-                    Text("Best \(store.bestBPM(g)) → \(g.targetBPM) BPM · today \(store.repsToday(g))/\(g.dailyReps) reps")
+                    Text(g.isComplete ? "Ladder complete · best \(store.bestBPM(g)) BPM"
+                         : "Step \(g.passedSteps + 1)/\(g.ladder.count): \(g.passReps) clean reps at \(g.currentBPM) BPM")
                         .font(.caption).foregroundStyle(Theme.dim)
                 }
                 Spacer()
@@ -510,6 +524,7 @@ struct MetronomeView: View {
         Card(title: "Tempo", icon: "metronome") {
             HStack(alignment: .firstTextBaseline) {
                 Button {
+                    guard m.lockedBPM == nil else { return }
                     bpmText = "\(Int(m.bpm))"
                     editingBPM = true
                 } label: {
@@ -530,7 +545,12 @@ struct MetronomeView: View {
                         .font(.caption).foregroundStyle(Theme.dim)
                 }
             }
+            if let l = m.lockedBPM {
+                Label("Locked to \(Int(l)) BPM by your goal step", systemImage: "lock.fill")
+                    .font(.footnote.weight(.semibold)).foregroundStyle(Theme.down)
+            }
             Slider(value: $m.bpm, in: 30...280, step: 1).tint(Theme.beat)
+                .disabled(m.lockedBPM != nil)
             HStack(spacing: 8) {
                 round("−5") { m.nudge(-5) }
                 round("−1") { m.nudge(-1) }
@@ -559,6 +579,7 @@ struct MetronomeView: View {
     }
 
     private func tap() {
+        guard m.lockedBPM == nil else { return }
         let now = Date()
         taps = taps.filter { now.timeIntervalSince($0) < 2.5 } + [now]
         guard taps.count >= 2 else { return }
@@ -682,6 +703,51 @@ struct MetronomeView: View {
             }
             .disabled(!m.voiceOn)
             .opacity(m.voiceOn ? 1 : 0.4)
+        }
+    }
+
+    // MARK: Coach
+
+    private var coachCard: some View {
+        Card(title: "Coach", icon: "person.wave.2.fill") {
+            HStack(spacing: 8) {
+                Chip(text: "Spoken verdict", selected: coach.verdictOn, tint: Theme.beat) { coach.verdictOn.toggle() }
+                Chip(text: "AI coach (Qwen)", selected: coach.aiOn, tint: Theme.sub) { coach.aiOn.toggle() }
+            }
+            if coach.aiOn {
+                switch coach.state {
+                case .downloading(let f):
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView(value: f).tint(Theme.sub)
+                        Text("Downloading coach model… \(Int(f * 100))% (about 900 MB, one time — use Wi-Fi)")
+                            .font(.footnote).foregroundStyle(Theme.dim)
+                    }
+                case .loading: Text("Loading model…").font(.footnote).foregroundStyle(Theme.dim)
+                case .ready: Label("AI coach ready — runs on your iPhone, offline", systemImage: "checkmark.circle.fill")
+                        .font(.footnote).foregroundStyle(.green)
+                case .failed(let e):
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Couldn't load the model: \(e). Using the built-in verdict.")
+                            .font(.footnote).foregroundStyle(.red)
+                        Button("Try again") { coach.prepare() }.font(.footnote.weight(.bold))
+                    }
+                case .off: EmptyView()
+                }
+            }
+            if coach.thinking {
+                Label("Coach is thinking…", systemImage: "ellipsis.bubble").font(.footnote).foregroundStyle(Theme.dim)
+            }
+            if let msg = coach.lastMessage {
+                Text("“\(msg)”").font(.system(.subheadline, design: .rounded)).italic()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.05)))
+            }
+            HStack {
+                Text("After each session the coach says how it went.").font(.footnote).foregroundStyle(Theme.dim)
+                Spacer()
+                Button("Test") { coach.test() }.font(.footnote.weight(.bold)).tint(Theme.beat)
+            }
         }
     }
 

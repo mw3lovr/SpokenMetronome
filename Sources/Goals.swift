@@ -10,6 +10,56 @@ struct Goal: Identifiable, Codable, Hashable {
     var targetBPM: Int
     var dailyReps: Int
     var created = Date()
+    // Tempo ladder
+    var stepBPM: Int = 5          // jump between steps
+    var passReps: Int = 10        // clean reps needed in one session to pass a step
+    var passedSteps: Int = 0
+    var locked: Bool = true       // metronome locked to the current step's tempo
+
+    init(name: String, startBPM: Int, targetBPM: Int, dailyReps: Int) {
+        self.name = name; self.startBPM = startBPM; self.targetBPM = targetBPM; self.dailyReps = dailyReps
+    }
+
+    /// Every tempo on the ladder, start → target.
+    var ladder: [Int] {
+        let step = max(stepBPM, 1)
+        guard targetBPM > startBPM else { return [startBPM] }
+        var v = Array(stride(from: startBPM, to: targetBPM, by: step))
+        v.append(targetBPM)
+        return v
+    }
+    var isComplete: Bool { passedSteps >= ladder.count }
+    var currentBPM: Int { ladder[min(passedSteps, ladder.count - 1)] }
+    var nextBPM: Int? { passedSteps + 1 < ladder.count ? ladder[passedSteps + 1] : nil }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, startBPM, targetBPM, dailyReps, created, stepBPM, passReps, passedSteps, locked
+    }
+    init(from d: Decoder) throws {
+        let c = try d.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        startBPM = try c.decode(Int.self, forKey: .startBPM)
+        targetBPM = try c.decode(Int.self, forKey: .targetBPM)
+        dailyReps = try c.decode(Int.self, forKey: .dailyReps)
+        created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
+        stepBPM = try c.decodeIfPresent(Int.self, forKey: .stepBPM) ?? 5
+        passReps = try c.decodeIfPresent(Int.self, forKey: .passReps) ?? 10
+        passedSteps = try c.decodeIfPresent(Int.self, forKey: .passedSteps) ?? 0
+        locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? true
+    }
+}
+
+/// Outcome of a session against the active goal's ladder.
+struct StepOutcome {
+    let goalName: String
+    let stepBPM: Int
+    let needed: Int
+    let got: Int
+    let passed: Bool
+    let wrongTempo: Bool
+    let nextBPM: Int?
+    let goalComplete: Bool
 }
 
 struct PracticeSession: Identifiable, Codable, Hashable {
@@ -56,6 +106,26 @@ final class GoalStore: ObservableObject {
 
     func log(_ s: PracticeSession) { sessions.insert(s, at: 0) }
 
+    /// Tempo the metronome must use, if the active goal is locked.
+    var lockedBPM: Int? {
+        guard let g = activeGoal, g.locked, !g.isComplete else { return nil }
+        return g.currentBPM
+    }
+
+    /// Check a finished session against the active goal and advance the ladder if passed.
+    func evaluate(_ s: PracticeSession) -> StepOutcome? {
+        guard let i = goals.firstIndex(where: { $0.id == s.goalID }), !goals[i].isComplete else { return nil }
+        let g = goals[i]
+        let wrong = s.bpm != g.currentBPM
+        let passed = !wrong && s.countedReps >= g.passReps
+        if passed { goals[i].passedSteps += 1 }
+        let ng = goals[i]
+        return StepOutcome(goalName: g.name, stepBPM: g.currentBPM, needed: g.passReps, got: s.countedReps,
+                           passed: passed, wrongTempo: wrong,
+                           nextBPM: passed ? (ng.isComplete ? nil : ng.currentBPM) : nil,
+                           goalComplete: ng.isComplete)
+    }
+
     func delete(_ g: Goal) {
         goals.removeAll { $0.id == g.id }
         sessions.removeAll { $0.goalID == g.id }
@@ -67,6 +137,10 @@ final class GoalStore: ObservableObject {
     func bestBPM(_ g: Goal) -> Int { sessions(for: g).filter { $0.countedReps > 0 }.map(\.bpm).max() ?? g.startBPM }
 
     func progress(_ g: Goal) -> Double {
+        return Double(min(g.passedSteps, g.ladder.count)) / Double(max(g.ladder.count, 1))
+    }
+
+    func speedProgress(_ g: Goal) -> Double {
         let span = Double(g.targetBPM - g.startBPM)
         guard span > 0 else { return bestBPM(g) >= g.targetBPM ? 1 : 0 }
         return min(max(Double(bestBPM(g) - g.startBPM) / span, 0), 1)
@@ -170,12 +244,17 @@ struct GoalsView: View {
                 Spacer()
                 Menu {
                     Button("Edit") { editing = g }
-                    Button("Practice this goal") { store.activeGoalID = g.id; m.bpm = Double(best) }
+                    Button("Practice current step") { practice(g) }
+                    Button("Reset ladder") {
+                        if let i = store.goals.firstIndex(where: { $0.id == g.id }) { store.goals[i].passedSteps = 0 }
+                    }
                     Button("Delete", role: .destructive) { store.delete(g) }
                 } label: {
                     Image(systemName: "ellipsis").font(.title3).frame(width: 44, height: 44)
                 }
             }
+
+            ladderView(g)
 
             HStack(spacing: 8) {
                 stat("Best", "\(best)", "BPM", Theme.down)
@@ -208,6 +287,50 @@ struct GoalsView: View {
         .padding(18)
         .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(active ? Theme.beat.opacity(0.6) : Theme.stroke))
+    }
+
+    private func practice(_ g: Goal) {
+        store.activeGoalID = g.id
+        m.bpm = Double(g.currentBPM)
+        m.loopOn = true
+        m.reps = g.passReps
+        m.syncSnapshot()
+    }
+
+    private func ladderView(_ g: Goal) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(g.isComplete ? "Ladder complete 🎉" : "Step \(g.passedSteps + 1) of \(g.ladder.count) · \(g.currentBPM) BPM")
+                    .font(.system(.subheadline, design: .rounded).weight(.bold))
+                Spacer()
+                Text("\(g.passReps) clean reps to pass").font(.caption).foregroundStyle(Theme.dim)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(g.ladder.enumerated()), id: \.offset) { i, bpm in
+                        let done = i < g.passedSteps, now = i == g.passedSteps
+                        VStack(spacing: 2) {
+                            Image(systemName: done ? "checkmark.circle.fill" : (now ? "play.circle.fill" : "lock.fill"))
+                                .font(.caption)
+                            Text("\(bpm)").font(.system(.subheadline, design: .rounded).weight(.heavy)).monospacedDigit()
+                        }
+                        .frame(width: 52, height: 52)
+                        .foregroundStyle(done ? .black : (now ? .black : Theme.dim))
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(done ? Color.green : (now ? Theme.down : Color.white.opacity(0.06))))
+                    }
+                }
+            }
+            if !g.isComplete {
+                Button { practice(g) } label: {
+                    Label("Practice \(g.currentBPM) BPM", systemImage: "play.fill")
+                        .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        .foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 42)
+                        .background(Capsule().fill(Theme.down))
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     private func stat(_ label: String, _ value: String, _ unit: String, _ color: Color) -> some View {
@@ -267,6 +390,15 @@ struct GoalEditor: View {
                 Section("Tempo") {
                     Stepper("Starting BPM: \(goal.startBPM)", value: $goal.startBPM, in: 30...280)
                     Stepper("Target BPM: \(goal.targetBPM)", value: $goal.targetBPM, in: 30...280)
+                }
+                Section {
+                    Stepper("Jump per step: +\(goal.stepBPM) BPM", value: $goal.stepBPM, in: 1...40)
+                    Stepper("Clean reps to pass: \(goal.passReps)", value: $goal.passReps, in: 1...100)
+                    Toggle("Lock metronome to step tempo", isOn: $goal.locked)
+                    Text("Steps: " + goal.ladder.map(String.init).joined(separator: " → "))
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: { Text("Tempo ladder") } footer: {
+                    Text("You stay on each tempo until you get the clean reps in one session. Kick check on = only clean kicks count.")
                 }
                 Section("Daily practice") {
                     Stepper("Reps per day: \(goal.dailyReps)", value: $goal.dailyReps, in: 1...200)
