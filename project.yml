@@ -5,8 +5,8 @@ options:
     iOS: "17.0"
 packages:
   MLXSwiftLM:
-    url: https://github.com/ml-explore/mlx-swift-lm
-    exactVersion: 2.29.1
+    url: https://github.com/ml-explore/mlx-swift-examples
+    exactVersion: 2.25.9
 targets:
   SpokenMetronome:
     type: application
